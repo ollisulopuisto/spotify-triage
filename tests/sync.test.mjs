@@ -38,6 +38,9 @@ const server = {
     { id: 'p2', name: 'Kuukausi 2019-02', snapshot: 'b1', count: 10 },
     { id: 'p3', name: 'Not a monthly list', snapshot: 'c1', count: 5 },
   ],
+  // Playlist IDs Spotify refuses to serve tracks for (editorial/algorithmic
+  // lists 403 for apps in development mode).
+  forbidden: new Set(),
   counters: { catalog: 0, trackPages: 0, trackFetchesByPlaylist: {}, created: [], added: [] },
 };
 
@@ -100,6 +103,14 @@ async function installMock(page) {
     const tracksMatch = pathname.match(/^\/v1\/playlists\/([^/]+)\/tracks$/);
     if (tracksMatch && route.request().method() === 'GET') {
       const id = tracksMatch[1];
+      if (server.forbidden.has(id)) {
+        return route.fulfill({
+          status: 403,
+          contentType: 'application/json',
+          headers: { 'Access-Control-Allow-Origin': '*' },
+          body: JSON.stringify({ error: { status: 403, message: 'Forbidden' } }),
+        });
+      }
       const pl = server.playlists.find((p) => p.id === id);
       const offset = Number(url.searchParams.get('offset') || 0);
       const limit = Number(url.searchParams.get('limit') || 100);
@@ -153,7 +164,13 @@ test.before(async () => {
   browser = await chromium.launch();
   page = await browser.newPage();
   page.on('pageerror', (e) => errors.push(String(e)));
-  page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+  page.on('console', (m) => {
+    // Chromium logs every non-2xx response itself. The forbidden-playlist test
+    // induces 403s on purpose, so that line is expected, not a defect.
+    if (m.type() === 'error' && !/Failed to load resource.*403/.test(m.text())) {
+      errors.push(m.text());
+    }
+  });
 
   await installMock(page);
   await page.goto(BASE_URL);
@@ -261,6 +278,36 @@ test('the cache survives a reload without touching the network', async () => {
   await page.waitForSelector('.album');
   assert.equal(server.counters.catalog, 0, 'no API call needed to browse');
   assert.match(await page.textContent('#count'), /from 2 playlists/);
+});
+
+test('one unreadable playlist does not sink the whole sync', async () => {
+  resetCounters();
+  await clearBanner(page);
+
+  // Spotify refuses p3 (as it does for editorial/algorithmic lists in dev mode).
+  server.forbidden.add('p3');
+  server.playlists.find((p) => p.id === 'p1').snapshot = 'a2';
+
+  await page.click('#btnPlaylists');
+  await page.waitForSelector('#pickerBackdrop:not([hidden])');
+  await page.fill('#pickerFilter', '');
+  await page.click('#btnPickMatching');
+  await page.waitForFunction(
+    () => document.getElementById('pickerCount').textContent.includes('3 playlists selected'),
+  );
+  await page.click('#btnPickerSave');
+  await waitForSync(page);
+
+  // p1 changed and must still be refetched even though p3 blew up.
+  assert.equal(server.counters.trackFetchesByPlaylist.p1, 1, 'p1 still synced');
+  const banner = await page.textContent('#banner');
+  assert.match(banner, /Synced/, 'the sync reports success, not a bare error');
+  assert.match(banner, /Not a monthly list/, 'the skipped playlist is named');
+
+  await page.waitForSelector('.album');
+  assert.match(await page.textContent('#count'), /from 2 playlists/);
+
+  server.forbidden.delete('p3');
 });
 
 test('nothing threw along the way', () => {

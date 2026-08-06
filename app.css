@@ -101,6 +101,8 @@ input::placeholder { color: #6b7078; }
   border-radius: 8px; background: var(--bg-raised); font-size: 14px;
 }
 .banner.ok { border-left-color: var(--accent); }
+/* A sync that mostly worked: stays put, unlike .ok, so the skipped list is read. */
+.banner.warn { border-left-color: #d9a441; }
 
 /* --- search & controls -------------------------------------------------- */
 

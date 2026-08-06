@@ -96,7 +96,7 @@ function banner(message, kind = 'error') {
   clearTimeout(bannerTimer);
   if (!message) { el.hidden = true; return; }
   el.textContent = message;
-  el.className = kind === 'ok' ? 'banner ok' : 'banner';
+  el.className = kind === 'ok' || kind === 'warn' ? `banner ${kind}` : 'banner';
   el.hidden = false;
   if (kind === 'ok') bannerTimer = setTimeout(() => { el.hidden = true; }, 4000);
 }
@@ -183,6 +183,7 @@ async function sync({ full = false } = {}) {
 
     let done = 0;
     let fetched = 0;
+    const skipped = [];
 
     for (const id of wanted) {
       if (state.cancelSync) break;
@@ -205,9 +206,16 @@ async function sync({ full = false } = {}) {
       }
 
       setProgress(`${meta.name} (${done}/${wanted.length})`, done, wanted.length);
-      const tracks = await api.playlistTracks(id);
-      await db.putPlaylist({ ...meta, tracks, syncedAt: new Date().toISOString() });
-      fetched += 1;
+      try {
+        const tracks = await api.playlistTracks(id);
+        await db.putPlaylist({ ...meta, tracks, syncedAt: new Date().toISOString() });
+        fetched += 1;
+      } catch (err) {
+        // One unreadable playlist must not cost the other 179. Spotify 403s
+        // editorial and algorithmic lists for apps in development mode, and a
+        // playlist can vanish mid-sync; keep going and report it at the end.
+        skipped.push({ name: meta.name, reason: err && err.message ? err.message : String(err) });
+      }
     }
 
     state.lastSync = new Date().toISOString();
@@ -215,14 +223,19 @@ async function sync({ full = false } = {}) {
     await db.setMeta('selectedPlaylistIds', [...state.selectedPlaylists]);
     await loadCache();
 
-    banner(
-      state.cancelSync
-        ? 'Sync cancelled — kept what had already been fetched.'
-        : `Synced ${plural(wanted.length, 'playlist', 'playlists')}`
-          + ` (${fetched} refetched, ${wanted.length - fetched} unchanged),`
-          + ` ${plural(state.library.tracks.length, 'unique track', 'unique tracks')}.`,
-      'ok',
-    );
+    const unchanged = wanted.length - fetched - skipped.length;
+    let message = state.cancelSync
+      ? 'Sync cancelled — kept what had already been fetched.'
+      : `Synced ${plural(wanted.length - skipped.length, 'playlist', 'playlists')}`
+        + ` (${fetched} refetched, ${unchanged} unchanged),`
+        + ` ${plural(state.library.tracks.length, 'unique track', 'unique tracks')}.`;
+    if (skipped.length) {
+      const names = skipped.slice(0, 3).map((s) => s.name).join(', ');
+      message += ` Skipped ${plural(skipped.length, 'playlist', 'playlists')} Spotify would not`
+        + ` return: ${names}${skipped.length > 3 ? `, and ${skipped.length - 3} more` : ''}`
+        + ` (${skipped[0].reason}).`;
+    }
+    banner(message, skipped.length ? 'warn' : 'ok');
   } catch (err) {
     banner(describeError(err));
   } finally {
@@ -612,7 +625,13 @@ function renderCounts() {
 
   $('count').textContent = state.library.tracks.length
     ? `${plural(state.matched.length, 'track', 'tracks')} · ${plural(nAlbums, 'album', 'albums')}`
-      + ` · from ${plural(state.selectedPlaylists.size, 'playlist', 'playlists')}`
+      // Count what the library was actually built from, not what was selected:
+      // a playlist Spotify refuses to serve contributes nothing.
+      + ` · from ${plural(
+        state.cached.filter((p) => state.selectedPlaylists.has(p.id)).length,
+        'playlist',
+        'playlists',
+      )}`
       + (state.lastSync ? ` · synced ${dateLabel(state.lastSync)}` : '')
     : '';
 
