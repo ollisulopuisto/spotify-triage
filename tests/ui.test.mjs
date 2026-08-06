@@ -293,6 +293,38 @@ test('the playlist picker lists every playlist and filters by name', async () =>
   await page.waitForSelector('#pickerBackdrop[hidden]', { state: 'hidden' });
 });
 
+test('shift-click selects the whole range between two clicks', async () => {
+  await page.click('#btnPlaylists');
+  await page.waitForSelector('#pickerBackdrop:not([hidden])');
+
+  await page.click('#btnUnpickMatching');
+  await page.waitForFunction(
+    () => document.getElementById('pickerCount').textContent.includes('0 playlists selected'),
+  );
+
+  const box = (i) => page.locator('.picker-row input[type=checkbox]').nth(i);
+
+  await box(2).click();
+  await box(6).click({ modifiers: ['Shift'] });
+  await page.waitForFunction(
+    () => document.getElementById('pickerCount').textContent.includes('5 playlists selected'),
+  );
+  for (const i of [2, 3, 4, 5, 6]) assert.equal(await box(i).isChecked(), true, `row ${i} checked`);
+  for (const i of [0, 1, 7]) assert.equal(await box(i).isChecked(), false, `row ${i} unchecked`);
+
+  // shift-click with an unchecking click clears the range too
+  await box(6).click();
+  await box(4).click({ modifiers: ['Shift'] });
+  await page.waitForFunction(
+    () => document.getElementById('pickerCount').textContent.includes('2 playlists selected'),
+  );
+  for (const i of [2, 3]) assert.equal(await box(i).isChecked(), true, `row ${i} still checked`);
+  for (const i of [4, 5, 6]) assert.equal(await box(i).isChecked(), false, `row ${i} cleared`);
+
+  await page.click('#btnPickerClose');
+  await page.waitForSelector('#pickerBackdrop[hidden]', { state: 'hidden' });
+});
+
 test('nothing threw along the way', () => {
   assert.deepEqual(consoleErrors, []);
 });

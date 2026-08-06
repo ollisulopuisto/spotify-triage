@@ -234,6 +234,7 @@ async function sync({ full = false } = {}) {
 // --- playlist picker -------------------------------------------------------
 
 let pickerDraft = new Set();
+let pickerAnchorId = null; // last plainly-clicked row; shift-click ranges from here
 
 function renderPicker() {
   const filter = $('pickerFilter').value.trim().toLowerCase();
@@ -248,14 +249,27 @@ function renderPicker() {
     list.append(h('div', { class: 'empty', text: 'No playlists match that filter.' }));
   }
 
-  for (const p of visible) {
+  visible.forEach((p, idx) => {
     const box = h('input', {
       type: 'checkbox',
       id: `pick-${p.id}`,
       checked: pickerDraft.has(p.id),
-      onchange: (e) => {
-        if (e.target.checked) pickerDraft.add(p.id);
+      // click, not change: only MouseEvent carries shiftKey
+      onclick: (e) => {
+        const on = e.target.checked;
+        const anchor = visible.findIndex((v) => v.id === pickerAnchorId);
+        if (e.shiftKey && anchor !== -1) {
+          const [lo, hi] = anchor < idx ? [anchor, idx] : [idx, anchor];
+          for (let i = lo; i <= hi; i++) {
+            if (on) pickerDraft.add(visible[i].id);
+            else pickerDraft.delete(visible[i].id);
+          }
+          renderPicker();
+          return;
+        }
+        if (on) pickerDraft.add(p.id);
         else pickerDraft.delete(p.id);
+        pickerAnchorId = p.id;
         updatePickerCount();
       },
     });
@@ -266,7 +280,7 @@ function renderPicker() {
       h('label', { for: `pick-${p.id}`, text: p.name }),
       h('span', { class: 'n', text: `${p.total}` }),
     ));
-  }
+  });
 
   updatePickerCount();
 }
@@ -290,6 +304,7 @@ async function openPicker() {
     return;
   }
   pickerDraft = new Set(state.selectedPlaylists);
+  pickerAnchorId = null;
   $('pickerFilter').value = '';
   renderPicker();
   $('pickerBackdrop').hidden = false;
