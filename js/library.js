@@ -347,7 +347,10 @@ export function facets(tracks, limit = 12) {
 
 // --- alphabetic index ------------------------------------------------------
 
-const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+// Finnish collation: A–Z, then Å Ä Ö as letters in their own right rather
+// than as decorated A and O.
+const EXTRA = ['Å', 'Ä', 'Ö'];
+const LETTERS = [...'ABCDEFGHIJKLMNOPQRSTUVWXYZ', ...EXTRA];
 // Leading articles are noise when browsing: nobody looks for The Beatles under T.
 const ARTICLE = /^(the|a|an)\s+/i;
 
@@ -357,6 +360,11 @@ const ARTICLE = /^(the|a|an)\s+/i;
 // with a digit or symbol goes to '#'.
 export function initialOf(name) {
   const stripped = String(name || '').trim().replace(ARTICLE, '');
+  // Look at the raw character first: after NFD folding Ä is indistinguishable
+  // from A, and here that distinction is the whole point.
+  const raw = stripped.charAt(0).toUpperCase();
+  if (EXTRA.includes(raw)) return raw;
+
   const first = stripped
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')

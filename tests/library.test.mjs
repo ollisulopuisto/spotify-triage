@@ -262,7 +262,7 @@ test('unknown field prefixes fall back to free text', () => {
 
 test('initials fold diacritics and ignore leading articles', () => {
   assert.equal(initialOf('Björk'), 'B');
-  assert.equal(initialOf('Ääniä'), 'A', 'Ä files under A, matching search folding');
+  assert.equal(initialOf('Émile'), 'E', 'plain accents still fold to their base letter');
   assert.equal(initialOf('The Beatles'), 'B');
   assert.equal(initialOf('A Tribe Called Quest'), 'T');
   assert.equal(initialOf('an Albatross'), 'A', 'the article is stripped, not the word');
@@ -294,4 +294,22 @@ test('byInitial filters on the same rule the counts were built from', () => {
   const names = ['The Beatles', 'Björk', 'Autechre'];
   assert.deepEqual(byInitial(names, 'B', (n) => n), ['The Beatles', 'Björk']);
   assert.deepEqual(byInitial(names, null, (n) => n), names, 'no letter means no filter');
+});
+
+test('Finnish keeps A, A and O as their own letters', () => {
+  assert.equal(initialOf('Ääniä'), 'Ä');
+  assert.equal(initialOf('Öljy'), 'Ö');
+  assert.equal(initialOf('Åke'), 'Å');
+  // Lowercase and article-prefixed names bucket the same way.
+  assert.equal(initialOf('ääniä'), 'Ä');
+  assert.equal(initialOf('The Ääniä'), 'Ä');
+});
+
+test('the rail runs A-Z then A, A, O, the way Finnish sorts', () => {
+  const counts = alphaCounts(['Aalto', 'Ääniä', 'Öljy', 'Åke', 'Zulu']);
+  const order = [...counts.keys()];
+  assert.deepEqual(order.slice(-4), ['Å', 'Ä', 'Ö', '#'], 'after Z, before #');
+  assert.equal(counts.get('Ä'), 1);
+  assert.equal(counts.get('Ö'), 1);
+  assert.equal(counts.get('A'), 1, 'Aalto stays under A');
 });

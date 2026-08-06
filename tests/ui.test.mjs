@@ -342,8 +342,8 @@ test('the A–Z rail lights only the letters that have something in them', async
   const lit = await page.locator('.alpha:not(.is-empty):not(.is-on)').allTextContents();
   // Aphex Twin, Björk + Boards of Canada, Radiohead, Slowdive, Talk Talk.
   assert.deepEqual(lit, ['A', 'B', 'R', 'S', 'T']);
-  // 26 letters plus the '#' bucket, less the five that have results.
-  assert.equal(await page.locator('.alpha.is-empty:disabled').count(), 22);
+  // 26 letters, Å Ä Ö, and '#', less the five that have results.
+  assert.equal(await page.locator('.alpha.is-empty:disabled').count(), 25);
 });
 
 test('picking a letter narrows the grid to that initial', async () => {
