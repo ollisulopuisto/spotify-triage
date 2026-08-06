@@ -1,5 +1,7 @@
 import { db } from './db.js';
-import { api, SpotifyError, setWaitReporter } from './api.js';
+import {
+  api, SpotifyError, setWaitReporter, cooldownRemaining, describeDuration,
+} from './api.js';
 import * as auth from './auth.js';
 import {
   buildLibrary, groupAlbums, search, sortResults, facets, SORTS,
@@ -189,6 +191,16 @@ async function fetchCatalog() {
 }
 
 async function sync({ full = false } = {}) {
+  const held = cooldownRemaining();
+  if (held) {
+    banner(
+      `Spotify is still rate-limiting this app — waiting ${describeDuration(held)}.`
+      + ' Syncing now would only extend it.',
+      'warn',
+    );
+    return;
+  }
+
   const wanted = [...state.selectedPlaylists];
   if (!wanted.length) {
     banner('No playlists selected yet — pick the monthly ones first.');

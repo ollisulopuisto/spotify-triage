@@ -31,7 +31,64 @@ export class SpotifyError extends Error {
   }
 }
 
-async function request(path, { method = 'GET', body = null, retriedAuth = false, attempt = 0 } = {}) {
+// Spotify sends no Access-Control-Expose-Headers, so a browser cannot read
+// Retry-After off a 429 no matter what the docs say — res.headers.get() always
+// returns null cross-origin. Backing off on our own schedule is the only
+// option, and retrying too eagerly is what keeps a penalty alive.
+const BACKOFF_SECONDS = [5, 20, 60];
+// Once the escalation is spent, stop trying at all for a while.
+const COOLDOWN_SECONDS = 300;
+const LS_COOLDOWN = 'crate.cooldownUntil';
+
+// After a 429 every later request is paced, and the gap decays once things are
+// healthy again. This is what stops a 180-playlist sync from re-triggering the
+// limit two requests after recovering.
+let gapMs = 0;
+let cleanRun = 0;
+
+function easeOff() {
+  gapMs = Math.min(gapMs * 2 + 250, 2000);
+  cleanRun = 0;
+}
+
+function easeOn() {
+  cleanRun += 1;
+  if (gapMs && cleanRun >= 40) {
+    gapMs = Math.floor(gapMs / 2);
+    cleanRun = 0;
+  }
+}
+
+// Remembered across reloads: retrying during a penalty is what extends it.
+export function cooldownRemaining() {
+  const until = Number(localStorage.getItem(LS_COOLDOWN) || 0);
+  const left = Math.ceil((until - Date.now()) / 1000);
+  return left > 0 ? left : 0;
+}
+
+function startCooldown(seconds) {
+  localStorage.setItem(LS_COOLDOWN, String(Date.now() + seconds * 1000));
+}
+
+export function clearCooldown() {
+  localStorage.removeItem(LS_COOLDOWN);
+}
+
+export function describeDuration(seconds) {
+  if (seconds < 90) return `${seconds} seconds`;
+  const mins = Math.round(seconds / 60);
+  if (mins < 90) return `${mins} minutes`;
+  return `${Math.round(mins / 60)} hours`;
+}
+
+async function request(path, { method = 'GET', body = null, retriedAuth = false, attempt = 0, rateAttempt = 0 } = {}) {
+  const held = cooldownRemaining();
+  if (held) {
+    throw new SpotifyError(429, `Spotify is rate-limiting this app for another ${describeDuration(held)}`);
+  }
+
+  if (gapMs) await sleep(gapMs);
+
   const token = await getAccessToken({ force: retriedAuth });
   const url = path.startsWith('http') ? path : BASE + path;
 
@@ -49,12 +106,34 @@ async function request(path, { method = 'GET', body = null, retriedAuth = false,
   }
 
   if (res.status === 429) {
-    // Spotify tells us exactly how long to wait; honour it rather than guessing.
-    const wait = Number(res.headers.get('Retry-After') || 2) + 1;
-    console.warn(`[crate] rate-limited, waiting ${wait}s before retrying`, url.replace(BASE, ''));
+    easeOff();
+    // Retry-After is unreadable cross-origin, so it is only ever a bonus.
+    const stated = Number(res.headers.get('Retry-After') || 0);
+    const step = BACKOFF_SECONDS[rateAttempt];
+    const wait = Math.max(stated, step || 0) + Math.round(Math.random() * 3);
+
+    console.warn(
+      `[crate] 429 #${rateAttempt + 1}, Retry-After=${stated || 'unreadable'},`
+      + ` pacing ${gapMs}ms, waiting ${wait || COOLDOWN_SECONDS}s`,
+      url.replace(BASE, '').split('?')[0],
+    );
+
+    if (!step) {
+      // Escalation spent. Refuse further calls for a while so a reload or an
+      // impatient second click cannot dig the hole deeper.
+      startCooldown(COOLDOWN_SECONDS);
+      throw new SpotifyError(
+        429,
+        'Spotify is rate-limiting this app. Nothing is broken — it clears on its own.'
+        + ` Try again in ${describeDuration(COOLDOWN_SECONDS)}.`,
+      );
+    }
+
     await waitOut(wait);
-    return request(path, { method, body, retriedAuth, attempt });
+    return request(path, { method, body, retriedAuth, attempt, rateAttempt: rateAttempt + 1 });
   }
+
+  easeOn();
 
   if (res.status >= 500 && attempt < 3) {
     await sleep(2 ** attempt * 1000);

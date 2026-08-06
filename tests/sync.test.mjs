@@ -44,6 +44,8 @@ const server = {
   // Playlist IDs that 403 only when the request carries a `fields` filter.
   forbiddenWithFields: new Set(),
   rateLimitOnce: false,
+  rateLimitTimes: 0,      // 429 this many more catalog reads
+  rateLimitRetryAfter: 2, // what the header says
   devices: [
     { id: 'dev1', name: 'Olli’s MacBook', type: 'Computer', is_active: true },
     { id: 'dev2', name: 'Kitchen speaker', type: 'Speaker', is_active: false },
@@ -117,12 +119,16 @@ async function installMock(page) {
 
     if (pathname === '/v1/me/playlists' && route.request().method() === 'GET') {
       // Rate-limit the next catalog read once, the way Spotify does.
-      if (server.rateLimitOnce) {
+      if (server.rateLimitOnce || server.rateLimitTimes > 0) {
         server.rateLimitOnce = false;
+        if (server.rateLimitTimes > 0) server.rateLimitTimes -= 1;
         return route.fulfill({
           status: 429,
           contentType: 'application/json',
-          headers: { 'Access-Control-Allow-Origin': '*', 'Retry-After': '2' },
+          headers: {
+            'Access-Control-Allow-Origin': '*',
+            'Retry-After': String(server.rateLimitRetryAfter),
+          },
           body: JSON.stringify({ error: { status: 429, message: 'Too Many Requests' } }),
         });
       }
@@ -503,6 +509,35 @@ test('a rate-limited sync says it is waiting instead of looking hung', async () 
 
   await waitForSync(page);
   assert.match(await page.textContent('#banner'), /Synced/, 'and then it recovers');
+});
+
+test('a persistent rate limit gives up and holds off, instead of hammering', async () => {
+  await clearBanner(page);
+  // Retry-After is unreadable cross-origin, so the mock does not send one:
+  // this is exactly what the app sees in production.
+  server.rateLimitTimes = 99;
+  server.rateLimitRetryAfter = 0;
+
+  await page.click('#btnSync');
+  await page.waitForFunction(
+    () => /rate-limiting/i.test(document.getElementById('banner').textContent),
+    null,
+    { timeout: 120000 },
+  );
+  assert.match(await page.textContent('#banner'), /try again in/i, 'it says when to come back');
+
+  // A second attempt is refused locally rather than spending another request.
+  server.rateLimitTimes = 0;
+  const before = server.counters.catalog;
+  await clearBanner(page);
+  await page.click('#btnSync');
+  await page.waitForFunction(
+    () => /rate-limiting/i.test(document.getElementById('banner').textContent),
+  );
+  assert.equal(server.counters.catalog, before, 'no request during the cooldown');
+
+  await page.evaluate(() => localStorage.removeItem('crate.cooldownUntil'));
+  server.rateLimitRetryAfter = 2;
 });
 
 test('nothing threw along the way', () => {
