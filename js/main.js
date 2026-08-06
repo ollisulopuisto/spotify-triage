@@ -54,6 +54,13 @@ const plural = (n, one, many) => `${n.toLocaleString()} ${n === 1 ? one : many}`
 
 const PAGE = 60;
 const LS_PREFS = 'crate.prefs';
+const LS_DEVICE = 'crate.deviceId';
+
+// Spotify takes the whole URI list as the queue in one call; a few hundred is
+// more than anyone listens through in a sitting and keeps the request small.
+const PLAY_CAP = 200;
+// Queueing costs one request per track, so this one has to stay modest.
+const QUEUE_CAP = 50;
 
 const state = {
   cached: [],          // playlist records from IndexedDB, tracks included
@@ -73,6 +80,8 @@ const state = {
   lastSync: null,
   cancelSync: false,
   me: null,
+  devices: [],
+  deviceId: localStorage.getItem(LS_DEVICE) || '',
 };
 
 function savePrefs() {
@@ -422,6 +431,7 @@ function albumCard(album) {
       h(
         'div',
         { class: 'album-actions' },
+        ...playButtons(album.tracks, album.name || 'this album'),
         h('button', {
           class: 'linkbtn',
           text: isOpen ? 'Hide tracks' : `Show ${album.tracks.length} track${album.tracks.length === 1 ? '' : 's'}`,
@@ -473,6 +483,7 @@ function trackRow(t) {
       text: t.name,
     })),
     h('div', { class: 'cell sub', text: t.artistLine }),
+    h('div', { class: 'cell playcell' }, ...playButtons([t], t.name)),
     h('div', { class: 'num hide-sm', text: t.year || '' }),
     h(
       'div',
@@ -652,6 +663,10 @@ function renderCounts() {
   $('btnClearSel').hidden = !hasSel;
   $('btnSelectAll').hidden = !state.items.length;
   $('btnExport').hidden = !state.items.length;
+  $('btnPlayAll').hidden = !state.items.length;
+  $('btnQueueAll').hidden = !state.items.length;
+  $('btnPlayAll').textContent = hasSel ? 'Play selection' : 'Play these';
+  $('btnQueueAll').textContent = hasSel ? 'Queue selection' : 'Queue these';
   $('btnExport').textContent = hasSel
     ? `Save ${state.selection.size} to a playlist`
     : 'Save these results as a playlist';
@@ -701,6 +716,135 @@ function readFilters() {
   state.rendered = PAGE;
 }
 
+// --- playback --------------------------------------------------------------
+
+function describePlaybackError(err) {
+  if (err instanceof SpotifyError && err.status === 404) {
+    return 'No active Spotify device. Open Spotify on a phone, desktop or speaker,'
+      + ' play something for a second, then pick it from the device list.';
+  }
+  if (err instanceof SpotifyError && err.status === 403) {
+    return `Spotify refused playback: ${err.message}.`
+      + ' Controlling playback over the Web API needs a Premium account.';
+  }
+  return describeError(err);
+}
+
+async function loadDevices() {
+  try {
+    state.devices = await api.devices();
+    if (!state.devices.some((d) => d.id === state.deviceId)) {
+      const active = state.devices.find((d) => d.isActive);
+      state.deviceId = active ? active.id : '';
+      localStorage.setItem(LS_DEVICE, state.deviceId);
+    }
+  } catch (err) {
+    console.warn('[crate] could not list devices:', err && err.message);
+    state.devices = [];
+  }
+  renderDevices();
+}
+
+function renderDevices() {
+  const sel = $('device');
+  sel.textContent = '';
+  if (!state.devices.length) {
+    sel.append(h('option', { value: '', text: 'No devices — open Spotify' }));
+    sel.disabled = true;
+    return;
+  }
+  sel.disabled = false;
+  for (const d of state.devices) {
+    sel.append(h('option', {
+      value: d.id,
+      text: `${d.name}${d.isActive ? ' (active)' : ''}`,
+      selected: d.id === state.deviceId,
+    }));
+  }
+}
+
+// The clicked tracks lead; everything still on screen follows, so one click on
+// a search result plays the search.
+function playQueueFrom(tracks) {
+  const lead = tracks.map((t) => t.uri);
+  const leadIds = new Set(tracks.map((t) => t.id));
+  const rest = matchedTracks()
+    .filter((t) => !leadIds.has(t.id))
+    .map((t) => t.uri);
+  return [...lead, ...rest].slice(0, PLAY_CAP);
+}
+
+function matchedTracks() {
+  return state.view === 'albums'
+    ? state.items.flatMap((a) => a.tracks || [])
+    : state.matched;
+}
+
+async function playNow(tracks) {
+  const uris = playQueueFrom(tracks);
+  if (!uris.length) return;
+  try {
+    await api.play(uris, state.deviceId || undefined);
+    banner(
+      `Playing ${tracks.length === 1 ? tracks[0].name : plural(tracks.length, 'track', 'tracks')}`
+      + `, then ${plural(uris.length - tracks.length, 'more track', 'more tracks')} from these`
+      + ' results.',
+      'ok',
+    );
+  } catch (err) {
+    banner(describePlaybackError(err));
+  }
+  loadDevices();
+}
+
+async function queueTracks(tracks) {
+  const uris = tracks.map((t) => t.uri).slice(0, QUEUE_CAP);
+  if (!uris.length) return;
+  const dropped = tracks.length - uris.length;
+  try {
+    if (uris.length > 4) showProgress('Queueing');
+    await api.queue(uris, state.deviceId || undefined, (done, total) => {
+      setProgress(`${done} of ${total} tracks`, done, total);
+    });
+    hideProgress();
+    banner(
+      `Queued ${plural(uris.length, 'track', 'tracks')}`
+      + `${dropped ? `; skipped ${dropped} past the ${QUEUE_CAP}-track limit` : ''}.`,
+      'ok',
+    );
+  } catch (err) {
+    hideProgress();
+    banner(describePlaybackError(err));
+  }
+  loadDevices();
+}
+
+// The bar acts on a selection when there is one, otherwise on everything shown.
+function selectedOrMatchedTracks() {
+  if (!state.selection.size) return matchedTracks();
+  const byId = new Map(state.library.tracks.map((t) => [t.id, t]));
+  return selectedTrackIds().map((id) => byId.get(id)).filter(Boolean);
+}
+
+function playButtons(tracks, label) {
+  return [
+    h('button', {
+      class: 'linkbtn play',
+      title: 'Play now',
+      'aria-label': `Play ${label} now`,
+      text: '▶',
+      onclick: () => playNow(tracks),
+    }),
+    h('button', {
+      class: 'linkbtn play',
+      title: 'Add to queue',
+      'aria-label': `Add ${label} to the queue`,
+      text: '＋',
+      onclick: () => queueTracks(tracks),
+    }),
+  ];
+}
+
 async function exportPlaylist() {
   const ids = selectedTrackIds();
   if (!ids.length) return;
@@ -747,6 +891,11 @@ function showSetup(show) {
   $('setup').hidden = !show;
   $('app').hidden = show;
   for (const id of ['btnPlaylists', 'btnSync', 'btnSignOut']) $(id).hidden = show;
+  const bar = $('device').parentElement;
+  if (bar) {
+    $('device').hidden = show;
+    bar.querySelector('.devicepick').hidden = show;
+  }
 }
 
 function debounce(fn, ms) {
@@ -874,6 +1023,13 @@ function wire() {
   $('btnClearSel').onclick = () => { state.selection.clear(); render(); };
   $('btnExport').onclick = exportPlaylist;
 
+  $('device').onchange = (e) => {
+    state.deviceId = e.target.value;
+    localStorage.setItem(LS_DEVICE, state.deviceId);
+  };
+  $('btnPlayAll').onclick = () => playNow(selectedOrMatchedTracks());
+  $('btnQueueAll').onclick = () => queueTracks(selectedOrMatchedTracks());
+
   // picker
   $('btnPickerClose').onclick = () => { $('pickerBackdrop').hidden = true; };
   $('pickerFilter').addEventListener('input', debounce(renderPicker, 150));
@@ -945,6 +1101,7 @@ async function start() {
   }
 
   showSetup(false);
+  loadDevices();
   $('brandSub').textContent = state.lastSync
     ? `${plural(state.library.tracks.length, 'track', 'tracks')} across `
       + `${plural(state.selectedPlaylists.size, 'playlist', 'playlists')}`

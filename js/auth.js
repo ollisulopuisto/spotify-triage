@@ -12,6 +12,9 @@ const SCOPES = [
   'playlist-read-collaborative',
   'playlist-modify-private',
   'playlist-modify-public',
+  // Spotify Connect: list devices, and start or queue playback on one.
+  'user-read-playback-state',
+  'user-modify-playback-state',
 ];
 
 const LS_CLIENT_ID = 'crate.clientId';

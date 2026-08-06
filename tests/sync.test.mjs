@@ -43,7 +43,19 @@ const server = {
   forbidden: new Set(),
   // Playlist IDs that 403 only when the request carries a `fields` filter.
   forbiddenWithFields: new Set(),
-  counters: { catalog: 0, trackPages: 0, trackFetchesByPlaylist: {}, created: [], added: [] },
+  devices: [
+    { id: 'dev1', name: 'Olli’s MacBook', type: 'Computer', is_active: true },
+    { id: 'dev2', name: 'Kitchen speaker', type: 'Speaker', is_active: false },
+  ],
+  counters: {
+    catalog: 0,
+    trackPages: 0,
+    trackFetchesByPlaylist: {},
+    created: [],
+    added: [],
+    played: [],
+    queued: [],
+  },
 };
 
 // The progress modal may open and close faster than a poll can see, so wait on
@@ -84,6 +96,23 @@ async function installMock(page) {
     const { pathname } = url;
 
     if (pathname === '/v1/me') return json(route, { id: 'me', display_name: 'Me' });
+
+    if (pathname === '/v1/me/player/devices') {
+      return json(route, { devices: server.devices });
+    }
+
+    if (pathname === '/v1/me/player/play' && route.request().method() === 'PUT') {
+      server.counters.played.push({
+        deviceId: url.searchParams.get('device_id'),
+        body: route.request().postDataJSON(),
+      });
+      return route.fulfill({ status: 204, headers: { 'Access-Control-Allow-Origin': '*' } });
+    }
+
+    if (pathname === '/v1/me/player/queue' && route.request().method() === 'POST') {
+      server.counters.queued.push(url.searchParams.get('uri'));
+      return route.fulfill({ status: 204, headers: { 'Access-Control-Allow-Origin': '*' } });
+    }
 
     if (pathname === '/v1/me/playlists' && route.request().method() === 'GET') {
       server.counters.catalog += 1;
@@ -362,6 +391,55 @@ test('a playlist that rejects the fields filter is refetched without it', async 
   assert.equal(server.counters.trackFetchesByPlaylist.p2, 1, 'p2 came back on the retry');
 
   server.forbiddenWithFields.delete('p2');
+});
+
+test('playing an album starts it and queues the rest of the results behind it', async () => {
+  server.counters.played = [];
+  await clearBanner(page);
+  await page.click('#btnReset');
+  await page.waitForSelector('.album');
+
+  const firstAlbum = page.locator('.album').first();
+  await firstAlbum.locator('button[title="Play now"]').click();
+  await page.waitForFunction(() => /Playing/.test(document.getElementById('banner').textContent));
+
+  assert.equal(server.counters.played.length, 1, 'one play call');
+  const { body } = server.counters.played[0];
+  assert.ok(Array.isArray(body.uris) && body.uris.length > 1, 'sends a list of track URIs');
+  assert.ok(body.uris.every((u) => u.startsWith('spotify:track:')), 'all are track URIs');
+
+  // The clicked album leads; later results follow so a search plays through.
+  const titles = await page.locator('.album .album-title').allTextContents();
+  assert.ok(titles.length > 1, 'more than one album was on screen');
+});
+
+test('queueing an album appends without interrupting playback', async () => {
+  server.counters.queued = [];
+  server.counters.played = [];
+  await clearBanner(page);
+
+  await page.locator('.album').first().locator('button[title="Add to queue"]').click();
+  await page.waitForFunction(() => /[Qq]ueued/.test(document.getElementById('banner').textContent));
+
+  assert.equal(server.counters.played.length, 0, 'nothing was interrupted');
+  assert.ok(server.counters.queued.length >= 1, 'tracks were queued');
+  assert.ok(
+    server.counters.queued.every((u) => u.startsWith('spotify:track:')),
+    'queued track URIs',
+  );
+});
+
+test('playback targets the chosen Spotify Connect device', async () => {
+  server.counters.played = [];
+  await clearBanner(page);
+
+  await page.waitForFunction(() => document.querySelectorAll('#device option').length >= 2);
+  await page.selectOption('#device', 'dev2');
+
+  await page.locator('.album').first().locator('button[title="Play now"]').click();
+  await page.waitForFunction(() => /Playing/.test(document.getElementById('banner').textContent));
+
+  assert.equal(server.counters.played[0].deviceId, 'dev2', 'played on the picked device');
 });
 
 test('nothing threw along the way', () => {

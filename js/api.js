@@ -158,6 +158,37 @@ export const api = {
     });
   },
 
+  // --- Spotify Connect ------------------------------------------------------
+
+  async devices() {
+    const data = await request('/me/player/devices');
+    return ((data && data.devices) || []).map((d) => ({
+      id: d.id,
+      name: d.name,
+      type: d.type,
+      isActive: Boolean(d.is_active),
+    }));
+  },
+
+  // Replaces whatever is playing. The URI list *is* the queue, so passing the
+  // whole result set is what makes a search play through.
+  play(uris, deviceId) {
+    const query = deviceId ? `?device_id=${encodeURIComponent(deviceId)}` : '';
+    return request(`/me/player/play${query}`, { method: 'PUT', body: { uris } });
+  },
+
+  // Appends without interrupting. One request per track is the only shape
+  // Spotify offers, so callers keep the list short.
+  async queue(uris, deviceId, onProgress) {
+    for (let i = 0; i < uris.length; i += 1) {
+      const params = new URLSearchParams({ uri: uris[i] });
+      if (deviceId) params.set('device_id', deviceId);
+      // eslint-disable-next-line no-await-in-loop
+      await request(`/me/player/queue?${params}`, { method: 'POST' });
+      if (onProgress) onProgress(i + 1, uris.length);
+    }
+  },
+
   async addTracks(playlistId, uris, onProgress) {
     for (let i = 0; i < uris.length; i += 100) {
       const batch = uris.slice(i, i + 100);

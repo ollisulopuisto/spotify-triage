@@ -121,6 +121,16 @@ test.before(async () => {
   await page.route('**://api.spotify.com/**', (r) => r.abort());
   await page.route('**://accounts.spotify.com/**', (r) => r.abort());
 
+  // The app asks for Connect devices on load. Answer with an empty list rather
+  // than aborting, so this suite exercises the no-devices state instead of a
+  // network error the browser would log. Registered last: later routes win.
+  await page.route('**://api.spotify.com/v1/me/player/devices*', (r) => r.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    headers: { 'Access-Control-Allow-Origin': '*' },
+    body: JSON.stringify({ devices: [] }),
+  }));
+
   await page.goto(BASE_URL);
   await seed(page, fakeCrate());
   await page.reload();
@@ -220,10 +230,10 @@ test('the tracks view lists individual tracks', async () => {
 
 test('expanding an album reveals its tracks', async () => {
   const album = page.locator('.album', { hasText: 'Souvlaki' });
-  await album.locator('.linkbtn').click();
+  await album.locator('.linkbtn:not(.play)').click();
   await album.locator('.tracklist').waitFor();
   assert.equal(await album.locator('.tracklist li').count(), 3);
-  await album.locator('.linkbtn').click();
+  await album.locator('.linkbtn:not(.play)').click();
 });
 
 test('selecting an album selects all of its tracks', async () => {
