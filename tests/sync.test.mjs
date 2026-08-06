@@ -41,6 +41,8 @@ const server = {
   // Playlist IDs Spotify refuses to serve tracks for (editorial/algorithmic
   // lists 403 for apps in development mode).
   forbidden: new Set(),
+  // Playlist IDs that 403 only when the request carries a `fields` filter.
+  forbiddenWithFields: new Set(),
   counters: { catalog: 0, trackPages: 0, trackFetchesByPlaylist: {}, created: [], added: [] },
 };
 
@@ -103,6 +105,14 @@ async function installMock(page) {
     const tracksMatch = pathname.match(/^\/v1\/playlists\/([^/]+)\/tracks$/);
     if (tracksMatch && route.request().method() === 'GET') {
       const id = tracksMatch[1];
+      if (server.forbiddenWithFields.has(id) && url.searchParams.has('fields')) {
+        return route.fulfill({
+          status: 403,
+          contentType: 'application/json',
+          headers: { 'Access-Control-Allow-Origin': '*' },
+          body: JSON.stringify({ error: { status: 403, message: 'Forbidden' } }),
+        });
+      }
       if (server.forbidden.has(id)) {
         return route.fulfill({
           status: 403,
@@ -167,7 +177,11 @@ test.before(async () => {
   page.on('console', (m) => {
     // Chromium logs every non-2xx response itself. The forbidden-playlist test
     // induces 403s on purpose, so that line is expected, not a defect.
-    if (m.type() === 'error' && !/Failed to load resource.*403/.test(m.text())) {
+    // Chromium logs the bare status line and the app logs its own 403 detail;
+    // the forbidden-playlist tests induce both deliberately.
+    const expected = /Failed to load resource.*403/.test(m.text())
+      || /^\[crate\] 403 /.test(m.text());
+    if (m.type() === 'error' && !expected) {
       errors.push(m.text());
     }
   });
@@ -308,6 +322,23 @@ test('one unreadable playlist does not sink the whole sync', async () => {
   assert.match(await page.textContent('#count'), /from 2 playlists/);
 
   server.forbidden.delete('p3');
+});
+
+test('a playlist that rejects the fields filter is refetched without it', async () => {
+  resetCounters();
+  await clearBanner(page);
+
+  server.forbiddenWithFields.add('p2');
+  server.playlists.find((p) => p.id === 'p2').snapshot = 'b3';
+
+  await page.click('#btnSync');
+  await waitForSync(page);
+
+  const banner = await page.textContent('#banner');
+  assert.doesNotMatch(banner, /Skipped/, 'the playlist is recovered, not skipped');
+  assert.equal(server.counters.trackFetchesByPlaylist.p2, 1, 'p2 came back on the retry');
+
+  server.forbiddenWithFields.delete('p2');
 });
 
 test('nothing threw along the way', () => {

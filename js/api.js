@@ -49,6 +49,13 @@ async function request(path, { method = 'GET', body = null, retriedAuth = false,
 
   if (!res.ok) {
     const message = (data && data.error && (data.error.message || data.error)) || res.statusText;
+    // Spotify's failure bodies are terse and the browser only logs a bare
+    // status line, so surface the whole thing for anyone reading the console.
+    console.error('[crate]', res.status, method, url.replace(BASE, ''), {
+      body: data,
+      reason: data && data.error && data.error.reason,
+      wwwAuthenticate: res.headers.get('WWW-Authenticate'),
+    });
     throw new SpotifyError(res.status, String(message));
   }
 
@@ -100,10 +107,21 @@ export const api = {
         + 'artists(id,name),album(id,name,release_date,images)))',
     ].join(',');
 
-    const items = await paged(
-      `/playlists/${playlistId}/tracks?limit=100&fields=${encodeURIComponent(fields)}`,
-      onProgress,
-    );
+    // `fields` trims the payload hard, but some accounts get a 403 back for
+    // filtered reads of playlists they can otherwise read. Fall back to the
+    // unfiltered request rather than lose the playlist.
+    let items;
+    try {
+      items = await paged(
+        `/playlists/${playlistId}/tracks?limit=100&fields=${encodeURIComponent(fields)}`,
+        onProgress,
+      );
+    } catch (err) {
+      if (!(err instanceof SpotifyError) || err.status !== 403) throw err;
+      console.warn('[crate] filtered read refused, retrying unfiltered:', playlistId);
+      items = await paged(`/playlists/${playlistId}/tracks?limit=100`, onProgress);
+      console.warn('[crate] unfiltered read succeeded:', playlistId);
+    }
 
     return items
       .filter((it) => it && it.track && it.track.id && !it.is_local)

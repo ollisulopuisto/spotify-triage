@@ -71,6 +71,9 @@ function storeTokenResponse(data, previous) {
     expiresAt: Date.now() + (data.expires_in - 60) * 1000,
   };
   writeTokens(tokens);
+  // The granted scopes are the one thing a 403 never tells you, and they are
+  // only ever visible in this response.
+  console.info('[crate] token scopes granted:', data.scope || '(none reported)');
   return tokens;
 }
 
