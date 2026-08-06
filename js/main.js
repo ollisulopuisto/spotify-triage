@@ -268,18 +268,40 @@ async function sync({ full = false } = {}) {
 
 let pickerDraft = new Set();
 let pickerAnchorId = null; // last plainly-clicked row; shift-click ranges from here
+let pickerScope = 'all';   // all | in | out
+
+// Already fetched and searchable, as opposed to merely ticked in this session.
+function inCrate(id) {
+  return state.cached.some((p) => p.id === id);
+}
+
+function visiblePlaylists() {
+  const filter = $('pickerFilter').value.trim().toLowerCase();
+  return state.catalog.filter((p) => {
+    if (filter && !p.name.toLowerCase().includes(filter)) return false;
+    if (pickerScope === 'in') return inCrate(p.id);
+    if (pickerScope === 'out') return !inCrate(p.id);
+    return true;
+  });
+}
 
 function renderPicker() {
-  const filter = $('pickerFilter').value.trim().toLowerCase();
   const list = $('pickerList');
   list.textContent = '';
 
-  const visible = state.catalog.filter(
-    (p) => !filter || p.name.toLowerCase().includes(filter),
-  );
+  const visible = visiblePlaylists();
+
+  for (const btn of $('pickerScope').querySelectorAll('button')) {
+    btn.classList.toggle('is-on', btn.dataset.scope === pickerScope);
+  }
 
   if (!visible.length) {
-    list.append(h('div', { class: 'empty', text: 'No playlists match that filter.' }));
+    list.append(h('div', {
+      class: 'empty',
+      text: pickerScope === 'out'
+        ? 'Every playlist that matches is already in your crate.'
+        : 'No playlists match that filter.',
+    }));
   }
 
   visible.forEach((p, idx) => {
@@ -311,6 +333,9 @@ function renderPicker() {
       { class: 'picker-row' },
       box,
       h('label', { for: `pick-${p.id}`, text: p.name }),
+      inCrate(p.id)
+        ? h('span', { class: 'in-crate', title: 'Already synced into your crate', text: 'in crate' })
+        : null,
       h('span', { class: 'n', text: `${p.total}` }),
     ));
   });
@@ -319,11 +344,20 @@ function renderPicker() {
 }
 
 function updatePickerCount() {
-  const tracks = state.catalog
-    .filter((p) => pickerDraft.has(p.id))
-    .reduce((sum, p) => sum + p.total, 0);
-  $('pickerCount').textContent = `${plural(pickerDraft.size, 'playlist', 'playlists')} selected`
-    + ` · about ${plural(tracks, 'track', 'tracks')}`;
+  const ticked = state.catalog.filter((p) => pickerDraft.has(p.id));
+  const tracks = ticked.reduce((sum, p) => sum + p.total, 0);
+  // Split the count so it is obvious what this save would actually change.
+  const already = ticked.filter((p) => inCrate(p.id)).length;
+  const added = ticked.length - already;
+  const dropped = state.cached.filter((p) => !pickerDraft.has(p.id)).length;
+
+  $('pickerCount').textContent = [
+    `${plural(pickerDraft.size, 'playlist', 'playlists')} selected`,
+    `${already} in crate`,
+    added ? `${added} new` : null,
+    dropped ? `${dropped} to remove` : null,
+    `about ${plural(tracks, 'track', 'tracks')}`,
+  ].filter(Boolean).join(' · ');
 }
 
 async function openPicker() {
@@ -338,17 +372,16 @@ async function openPicker() {
   }
   pickerDraft = new Set(state.selectedPlaylists);
   pickerAnchorId = null;
+  pickerScope = 'all';
   $('pickerFilter').value = '';
   renderPicker();
   $('pickerBackdrop').hidden = false;
   $('pickerFilter').focus();
 }
 
+// "Matching" means what is on screen, so the scope tabs narrow it too.
 function matchingIds() {
-  const filter = $('pickerFilter').value.trim().toLowerCase();
-  return state.catalog
-    .filter((p) => !filter || p.name.toLowerCase().includes(filter))
-    .map((p) => p.id);
+  return visiblePlaylists().map((p) => p.id);
 }
 
 // --- rendering -------------------------------------------------------------
@@ -1033,6 +1066,13 @@ function wire() {
   // picker
   $('btnPickerClose').onclick = () => { $('pickerBackdrop').hidden = true; };
   $('pickerFilter').addEventListener('input', debounce(renderPicker, 150));
+  $('pickerScope').onclick = (e) => {
+    const btn = e.target.closest('button[data-scope]');
+    if (!btn) return;
+    pickerScope = btn.dataset.scope;
+    pickerAnchorId = null; // ranges must not span a list the user cannot see
+    renderPicker();
+  };
   $('btnPickMatching').onclick = () => {
     matchingIds().forEach((id) => pickerDraft.add(id));
     renderPicker();

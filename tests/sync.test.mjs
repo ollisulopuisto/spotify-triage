@@ -442,6 +442,39 @@ test('playback targets the chosen Spotify Connect device', async () => {
   assert.equal(server.counters.played[0].deviceId, 'dev2', 'played on the picked device');
 });
 
+test('the picker separates what is already in the crate from what is not', async () => {
+  // A playlist that exists on the account but has never been added.
+  server.playlists.push({ id: 'p4', name: 'Bought albums', snapshot: 'd1', count: 4 });
+  await clearBanner(page);
+  await page.click('#btnSync');
+  await waitForSync(page);
+
+  await page.click('#btnPlaylists');
+  await page.waitForSelector('#pickerBackdrop:not([hidden])');
+  await page.waitForFunction(() => document.querySelectorAll('.picker-row').length === 4);
+
+  // Rows already in the crate say so; the new one does not.
+  assert.equal(await page.locator('.picker-row .in-crate').count(), 3);
+
+  await page.click('#pickerScope button[data-scope="in"]');
+  await page.waitForFunction(() => document.querySelectorAll('.picker-row').length === 3);
+  assert.doesNotMatch(await page.textContent('#pickerList'), /Bought albums/);
+
+  await page.click('#pickerScope button[data-scope="out"]');
+  await page.waitForFunction(() => document.querySelectorAll('.picker-row').length === 1);
+  assert.match(await page.textContent('#pickerList'), /Bought albums/);
+
+  // Ticking it counts as newly added until the crate is saved.
+  await page.locator('.picker-row input[type=checkbox]').first().check();
+  await page.waitForFunction(
+    () => /1 new/.test(document.getElementById('pickerCount').textContent),
+  );
+  assert.match(await page.textContent('#pickerCount'), /3 in crate/);
+
+  await page.click('#btnPickerClose');
+  await page.waitForSelector('#pickerBackdrop[hidden]', { state: 'hidden' });
+});
+
 test('nothing threw along the way', () => {
   assert.deepEqual(errors, []);
 });

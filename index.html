@@ -145,6 +145,11 @@
       <button id="btnPickMatching" class="btn btn-small">Select matching</button>
       <button id="btnUnpickMatching" class="btn btn-small btn-quiet">Deselect matching</button>
     </div>
+    <div id="pickerScope" class="seg-row" role="tablist" aria-label="Which playlists to show">
+      <button class="seg is-on" data-scope="all" role="tab">All</button>
+      <button class="seg" data-scope="in" role="tab">In crate</button>
+      <button class="seg" data-scope="out" role="tab">Not in crate</button>
+    </div>
     <div id="pickerList" class="picker-list"></div>
     <footer class="modal-foot">
       <span id="pickerCount" class="muted"></span>

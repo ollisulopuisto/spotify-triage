@@ -135,6 +135,19 @@ main { padding: 20px; max-width: 1400px; margin: 0 auto; }
 }
 .seg.is-active { background: var(--bg-hover); color: var(--text); }
 
+/* Scope tabs inside the playlist picker. */
+.seg-row {
+  display: flex; gap: 2px; margin: 10px 0 6px;
+  background: var(--bg-raised); border: 1px solid var(--line);
+  border-radius: 999px; padding: 2px; width: fit-content;
+}
+.seg-row .seg { padding: 5px 14px; font-size: 13px; }
+.seg-row .seg.is-on { background: var(--bg-hover); color: var(--text); }
+.in-crate {
+  font-size: 11px; color: var(--accent); border: 1px solid var(--accent);
+  border-radius: 999px; padding: 1px 7px; white-space: nowrap;
+}
+
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
 .chip {
   display: inline-flex; align-items: center; gap: 6px;
