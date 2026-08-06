@@ -540,6 +540,47 @@ test('a persistent rate limit gives up and holds off, instead of hammering', asy
   server.rateLimitRetryAfter = 2;
 });
 
+test('Cancel interrupts a rate-limit wait immediately', async () => {
+  // Abort any request chain still backing off from the previous test, or it
+  // will overwrite the banner this test is about to assert on.
+  // The button is hidden with the dialog, so fire it directly.
+  await page.evaluate(() => document.getElementById('btnCancelSync').click());
+  await page.waitForTimeout(300);
+  await clearBanner(page);
+  await page.evaluate(() => {
+    localStorage.removeItem('crate.cooldownUntil');
+    // Stale text from an earlier test would otherwise match instantly.
+    document.getElementById('progressText').textContent = '';
+  });
+  server.rateLimitTimes = 99;
+  server.rateLimitRetryAfter = 0;
+
+  await page.click('#btnSync');
+  // Wait until the dialog is genuinely open and sitting in the countdown.
+  await page.waitForFunction(
+    () => !document.getElementById('progressBackdrop').hidden
+      && /rate-limited/i.test(document.getElementById('progressText').textContent),
+    null,
+    { timeout: 20000 },
+  );
+
+  const started = Date.now();
+  await page.click('#btnCancelSync');
+
+  // It must not sit out the remaining seconds first.
+  await page.waitForSelector('#progressBackdrop[hidden]', { state: 'hidden', timeout: 5000 });
+  assert.ok(Date.now() - started < 5000, 'cancel took effect promptly');
+  await page.waitForFunction(
+    () => /cancel/i.test(document.getElementById('banner').textContent),
+    null,
+    { timeout: 5000 },
+  );
+
+  server.rateLimitTimes = 0;
+  server.rateLimitRetryAfter = 2;
+  await page.evaluate(() => localStorage.removeItem('crate.cooldownUntil'));
+});
+
 test('nothing threw along the way', () => {
   assert.deepEqual(errors, []);
 });

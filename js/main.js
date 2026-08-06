@@ -1,6 +1,7 @@
 import { db } from './db.js';
 import {
   api, SpotifyError, setWaitReporter, cooldownRemaining, describeDuration,
+  cancelInFlight, resetCancel,
 } from './api.js';
 import * as auth from './auth.js';
 import {
@@ -124,6 +125,7 @@ function banner(message, kind = 'error') {
 }
 
 function describeError(err) {
+  if (err && err.cancelled) return 'Cancelled.';
   if (err instanceof SpotifyError && err.status === 403) {
     return `Spotify refused the request (403). If your developer app is in development mode, `
       + `add your own Spotify account under the app's "User Management" settings. (${err.message})`;
@@ -135,6 +137,7 @@ function describeError(err) {
 
 function showProgress(title) {
   state.cancelSync = false;
+  resetCancel();
   $('progressTitle').textContent = title;
   $('progressText').textContent = '';
   $('progressBar').style.width = '0%';
@@ -1183,7 +1186,11 @@ function wire() {
     await sync();
   };
 
-  $('btnCancelSync').onclick = () => { state.cancelSync = true; };
+  $('btnCancelSync').onclick = () => {
+    state.cancelSync = true;
+    // Interrupt whatever is in flight — a backoff wait, a page fetch, pacing.
+    cancelInFlight();
+  };
 
   // Infinite scroll: cheaper than virtualising, and good enough for 60 at a time.
   const io = new IntersectionObserver((entries) => {

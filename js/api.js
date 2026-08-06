@@ -14,13 +14,36 @@ export function setWaitReporter(fn) {
   onWait = fn;
 }
 
-// Count down out loud, one second at a time.
+// Cancel has to reach inside the waits and the pagination loops, not just sit
+// in a flag the caller checks between playlists.
+export class CancelledError extends Error {
+  constructor() {
+    super('Cancelled');
+    this.cancelled = true;
+  }
+}
+
+let cancelled = false;
+export function cancelInFlight() {
+  cancelled = true;
+}
+export function resetCancel() {
+  cancelled = false;
+}
+function throwIfCancelled() {
+  if (cancelled) throw new CancelledError();
+}
+
+// Count down out loud, one second at a time, and give up the moment the user
+// asks — a 60s wait you cannot interrupt is indistinguishable from a freeze.
 async function waitOut(seconds) {
   for (let left = seconds; left > 0; left -= 1) {
+    throwIfCancelled();
     if (onWait) onWait(left);
     // eslint-disable-next-line no-await-in-loop
     await sleep(1000);
   }
+  throwIfCancelled();
   if (onWait) onWait(0);
 }
 
@@ -87,7 +110,9 @@ async function request(path, { method = 'GET', body = null, retriedAuth = false,
     throw new SpotifyError(429, `Spotify is rate-limiting this app for another ${describeDuration(held)}`);
   }
 
+  throwIfCancelled();
   if (gapMs) await sleep(gapMs);
+  throwIfCancelled();
 
   const token = await getAccessToken({ force: retriedAuth });
   const url = path.startsWith('http') ? path : BASE + path;
@@ -166,6 +191,7 @@ async function paged(path, onPage) {
   let next = path;
   const out = [];
   while (next) {
+    throwIfCancelled();
     // eslint-disable-next-line no-await-in-loop
     const page = await request(next);
     if (!page) break;
