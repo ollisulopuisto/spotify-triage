@@ -166,6 +166,17 @@ async function sync({ full = false } = {}) {
     if (!state.catalog.length) {
       state.catalog = (await db.getMeta('catalog')) || [];
     }
+    // Which account the token actually belongs to: a 403 never says, and it
+    // has to match the account allowlisted on the developer app.
+    try {
+      const who = await api.me();
+      console.info('[crate] signed in as', JSON.stringify({
+        id: who && who.id, name: who && who.display_name, product: who && who.product,
+      }));
+    } catch (err) {
+      console.warn('[crate] could not read the account:', err && err.message);
+    }
+
     // Refresh the catalog so snapshot IDs (and any new months) are current.
     setProgress('Checking for changes…', 0, 0);
     state.catalog = await api.myPlaylists();

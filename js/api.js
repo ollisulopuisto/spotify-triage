@@ -51,11 +51,13 @@ async function request(path, { method = 'GET', body = null, retriedAuth = false,
     const message = (data && data.error && (data.error.message || data.error)) || res.statusText;
     // Spotify's failure bodies are terse and the browser only logs a bare
     // status line, so surface the whole thing for anyone reading the console.
-    console.error('[crate]', res.status, method, url.replace(BASE, ''), {
-      body: data,
-      reason: data && data.error && data.error.reason,
-      wwwAuthenticate: res.headers.get('WWW-Authenticate'),
-    });
+    // Stringify: the console collapses objects to {…} and the body is the
+    // only part of a Spotify failure that ever explains itself.
+    console.error(
+      '[crate]', res.status, method, url.replace(BASE, '').split('?')[0],
+      'body=', JSON.stringify(data),
+      'wwwAuth=', res.headers.get('WWW-Authenticate'),
+    );
     throw new SpotifyError(res.status, String(message));
   }
 
