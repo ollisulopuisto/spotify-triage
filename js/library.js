@@ -344,3 +344,43 @@ export function facets(tracks, limit = 12) {
     decades: [...decades.entries()].sort((a, b) => b[0] - a[0]),
   };
 }
+
+// --- alphabetic index ------------------------------------------------------
+
+const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+// Leading articles are noise when browsing: nobody looks for The Beatles under T.
+const ARTICLE = /^(the|a|an)\s+/i;
+
+// The letter a name files under. Diacritics fold to their base letter so this
+// agrees with search — Björk and Ääniä sit under B and A, not in their own
+// buckets. Non-Latin scripts keep their own character; anything that starts
+// with a digit or symbol goes to '#'.
+export function initialOf(name) {
+  const stripped = String(name || '').trim().replace(ARTICLE, '');
+  const first = stripped
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .charAt(0);
+  if (!first) return '#';
+  const upper = first.toUpperCase();
+  if (LETTERS.includes(upper)) return upper;
+  return /\p{L}/u.test(upper) ? upper : '#';
+}
+
+// Every A–Z bucket is present even when empty, so the rail can show the shape
+// of the collection rather than only the letters that happen to be used.
+export function alphaCounts(names) {
+  const counts = new Map(LETTERS.map((l) => [l, 0]));
+  counts.set('#', 0);
+  for (const name of names) {
+    const key = initialOf(name);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  return counts;
+}
+
+export function byInitial(items, letter, keyFn) {
+  if (!letter) return items;
+  return items.filter((item) => initialOf(keyFn(item)) === letter);
+}

@@ -312,3 +312,17 @@ a.album-title:hover { color: var(--accent); text-decoration: underline; }
   .row { grid-template-columns: 24px 40px minmax(0, 2fr) minmax(0, 1fr) 48px 52px; }
   .row .hide-sm { display: none; }
 }
+
+/* A–Z browser. The rail keeps every letter in place so the eye can return to
+   the same spot, and empty letters stay visible: a gap is worth seeing. */
+.alphabar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.alpha-rail { display: flex; flex-wrap: wrap; gap: 2px; }
+.alpha {
+  min-width: 26px; padding: 4px 6px;
+  background: none; border: 1px solid transparent; border-radius: 6px;
+  color: var(--muted); font: inherit; font-size: 13px; font-weight: 600;
+  cursor: pointer; font-variant-numeric: tabular-nums;
+}
+.alpha:hover:not(:disabled) { background: var(--bg-raised); color: var(--text); }
+.alpha.is-on { background: var(--accent); border-color: var(--accent); color: #04160c; }
+.alpha.is-empty { opacity: 0.28; cursor: default; }

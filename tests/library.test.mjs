@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 
 import {
   normalize, buildLibrary, groupAlbums, parseQuery, search, sortResults, facets,
+  initialOf, alphaCounts, byInitial,
 } from '../js/library.js';
 
 function track(over = {}) {
@@ -257,4 +258,40 @@ test('unknown field prefixes fall back to free text', () => {
   const { tracks } = buildLibrary(CRATE);
   // "genre:" is not supported, so this must not silently match everything.
   assert.equal(search(tracks, 'genre:techno').length, 0);
+});
+
+test('initials fold diacritics and ignore leading articles', () => {
+  assert.equal(initialOf('Björk'), 'B');
+  assert.equal(initialOf('Ääniä'), 'A', 'Ä files under A, matching search folding');
+  assert.equal(initialOf('The Beatles'), 'B');
+  assert.equal(initialOf('A Tribe Called Quest'), 'T');
+  assert.equal(initialOf('an Albatross'), 'A', 'the article is stripped, not the word');
+  assert.equal(initialOf('  spaced out'), 'S');
+});
+
+test('anything that is not a letter files under #', () => {
+  assert.equal(initialOf('4hero'), '#');
+  assert.equal(initialOf('!!!'), '#');
+  assert.equal(initialOf(''), '#');
+  assert.equal(initialOf(null), '#');
+});
+
+test('non-Latin scripts keep their own initial rather than collapsing to #', () => {
+  assert.equal(initialOf('東京'), '東');
+  assert.equal(initialOf('Кино'), 'К');
+});
+
+test('alpha counts cover every letter so the rail can show empties', () => {
+  const counts = alphaCounts(['Aphex Twin', 'Autechre', 'Boards of Canada', '4hero']);
+  assert.equal(counts.get('A'), 2);
+  assert.equal(counts.get('B'), 1);
+  assert.equal(counts.get('#'), 1);
+  assert.equal(counts.get('C'), 0, 'empty letters are present with a zero');
+  assert.equal(counts.get('Z'), 0);
+});
+
+test('byInitial filters on the same rule the counts were built from', () => {
+  const names = ['The Beatles', 'Björk', 'Autechre'];
+  assert.deepEqual(byInitial(names, 'B', (n) => n), ['The Beatles', 'Björk']);
+  assert.deepEqual(byInitial(names, null, (n) => n), names, 'no letter means no filter');
 });

@@ -3,6 +3,7 @@ import { api, SpotifyError } from './api.js';
 import * as auth from './auth.js';
 import {
   buildLibrary, groupAlbums, search, sortResults, facets, SORTS,
+  alphaCounts, byInitial,
 } from './library.js';
 
 // --- tiny DOM helper -------------------------------------------------------
@@ -82,7 +83,17 @@ const state = {
   me: null,
   devices: [],
   deviceId: localStorage.getItem(LS_DEVICE) || '',
+  alphaKey: 'artist',  // which name the A–Z rail indexes
+  letter: null,        // selected bucket, or null for everything
 };
+
+// The name an item files under, per browse key. Albums and tracks both carry
+// an artist line, so one function covers both views.
+function alphaNameOf(item) {
+  if (state.alphaKey === 'artist') return item.artistLine || '';
+  if (state.alphaKey === 'album') return item.albumName || item.name || '';
+  return item.name || '';
+}
 
 function savePrefs() {
   localStorage.setItem(LS_PREFS, JSON.stringify({ view: state.view, sort: state.sort }));
@@ -533,6 +544,46 @@ function trackRow(t) {
   );
 }
 
+function renderAlpha() {
+  const bar = $('alphaBar');
+  bar.hidden = !state.library.tracks.length;
+  if (bar.hidden) return;
+
+  // Browsing by track name is meaningless when the rows are albums.
+  const keySel = $('alphaKey');
+  const trackOpt = keySel.querySelector('option[value="track"]');
+  trackOpt.hidden = state.view === 'albums';
+  if (state.view === 'albums' && state.alphaKey === 'track') state.alphaKey = 'album';
+  keySel.value = state.alphaKey;
+
+  const rail = $('alphaRail');
+  rail.textContent = '';
+
+  const total = [...state.alphaCounts.values()].reduce((a, b) => a + b, 0);
+  rail.append(h('button', {
+    class: `alpha${state.letter ? '' : ' is-on'}`,
+    text: 'All',
+    title: `${total} shown`,
+    onclick: () => { state.letter = null; render(); },
+  }));
+
+  for (const [letter, n] of state.alphaCounts) {
+    rail.append(h('button', {
+      // An empty letter stays visible but unclickable: the gap is information.
+      class: `alpha${state.letter === letter ? ' is-on' : ''}${n ? '' : ' is-empty'}`,
+      text: letter,
+      title: n ? `${plural(n, 'result', 'results')}` : 'nothing here',
+      disabled: !n,
+      'aria-pressed': state.letter === letter ? 'true' : 'false',
+      onclick: () => {
+        state.letter = state.letter === letter ? null : letter;
+        state.rendered = PAGE;
+        render();
+      },
+    }));
+  }
+}
+
 function renderFacets() {
   const f = facets(state.matched);
 
@@ -707,10 +758,20 @@ function renderCounts() {
 
 function render() {
   state.matched = search(state.library.tracks, state.query, state.filters);
-  state.items = state.view === 'albums'
-    ? sortResults(groupAlbums(state.matched), state.sort, state.shuffleSeed)
-    : sortResults(state.matched, state.sort, state.shuffleSeed);
 
+  const base = state.view === 'albums' ? groupAlbums(state.matched) : state.matched;
+  // Count before the letter filter, so the rail always shows the shape of the
+  // current search rather than of the bucket you already picked.
+  state.alphaCounts = alphaCounts(base.map(alphaNameOf));
+  if (state.letter && !state.alphaCounts.get(state.letter)) state.letter = null;
+
+  state.items = sortResults(
+    byInitial(base, state.letter, alphaNameOf),
+    state.sort,
+    state.shuffleSeed,
+  );
+
+  renderAlpha();
   renderActiveFilters();
   renderResults();
   renderFacets();
@@ -1041,6 +1102,7 @@ function wire() {
     readFilters();
     state.selection.clear();
     state.expanded.clear();
+    state.letter = null;
     $('btnClear').hidden = true;
     render();
   };
@@ -1059,6 +1121,12 @@ function wire() {
   $('device').onchange = (e) => {
     state.deviceId = e.target.value;
     localStorage.setItem(LS_DEVICE, state.deviceId);
+  };
+  $('alphaKey').onchange = (e) => {
+    state.alphaKey = e.target.value;
+    state.letter = null;
+    state.rendered = PAGE;
+    render();
   };
   $('btnPlayAll').onclick = () => playNow(selectedOrMatchedTracks());
   $('btnQueueAll').onclick = () => queueTracks(selectedOrMatchedTracks());

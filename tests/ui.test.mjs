@@ -335,6 +335,42 @@ test('shift-click selects the whole range between two clicks', async () => {
   await page.waitForSelector('#pickerBackdrop[hidden]', { state: 'hidden' });
 });
 
+test('the A–Z rail lights only the letters that have something in them', async () => {
+  await page.click('#btnReset');
+  await page.waitForSelector('.alpha');
+
+  const lit = await page.locator('.alpha:not(.is-empty):not(.is-on)').allTextContents();
+  // Aphex Twin, Björk + Boards of Canada, Radiohead, Slowdive, Talk Talk.
+  assert.deepEqual(lit, ['A', 'B', 'R', 'S', 'T']);
+  // 26 letters plus the '#' bucket, less the five that have results.
+  assert.equal(await page.locator('.alpha.is-empty:disabled').count(), 22);
+});
+
+test('picking a letter narrows the grid to that initial', async () => {
+  await page.click('.alpha:text-is("B")');
+  await page.waitForFunction(() => document.querySelectorAll('.album').length === 2);
+
+  const artists = await page.locator('.album .album-artist').allTextContents();
+  assert.deepEqual([...artists].sort(), ['Björk', 'Boards of Canada'], 'Björk files under B');
+
+  // Clicking the same letter again clears it.
+  await page.click('.alpha.is-on:text-is("B")');
+  await page.waitForFunction(() => document.querySelectorAll('.album').length === 6);
+});
+
+test('browsing by album re-buckets on the album name', async () => {
+  await page.selectOption('#alphaKey', 'album');
+  await page.waitForSelector('.alpha:not(.is-empty)');
+
+  await page.click('.alpha:text-is("K")');
+  await page.waitForFunction(() => document.querySelectorAll('.album').length === 1);
+  assert.match(await page.textContent('.album .album-title'), /Kid A/);
+
+  await page.click('#btnReset');
+  await page.selectOption('#alphaKey', 'artist');
+  await page.waitForFunction(() => document.querySelectorAll('.album').length === 6);
+});
+
 test('nothing threw along the way', () => {
   assert.deepEqual(consoleErrors, []);
 });
