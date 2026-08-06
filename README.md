@@ -45,13 +45,42 @@ about a minute and is a one-time cost.
    `http://127.0.0.1:8765/` (the app shows you the exact string, with a copy
    button) → tick **Web API** → save.
 
+   You do **not** need a new app per tool. A Spotify app accepts several
+   redirect URIs, so if you are near the app limit, open an existing app and
+   just add this one's URI to its list — then reuse that Client ID. The Client
+   ID is not a secret; PKCE exists precisely so a browser app never needs the
+   client secret.
+
 3. **Paste the Client ID** from the app's settings into Crate and sign in.
 
 4. **Pick your playlists.** Filter by name (e.g. type `2019`, or whatever you
    call your monthly lists), *Select matching*, repeat, then **Save and sync**.
 
-Deploying to any static host works too — GitHub Pages, Netlify, an S3 bucket.
-Just register that URL as the redirect URI instead.
+## Deploying
+
+Any static host works — Vercel, Netlify, GitHub Pages, an S3 bucket. There is
+nothing to build; the repo root is the site.
+
+`vercel.json` disables the install and build steps. Without it, Vercel would
+see `package.json` and spend several minutes downloading Playwright's Chromium
+to deploy a page that needs no build at all.
+
+Two things to get right:
+
+- **Register the deployed URL as a redirect URI**, exactly as the app displays
+  it (`https://your-app.vercel.app/`, trailing slash included). Spotify matches
+  the string literally.
+- **Use the production URL, not a preview one.** Vercel gives every deployment
+  its own hostname, and those will not match the registered redirect URI, so
+  sign-in fails on previews. Only the stable production domain will work unless
+  you register each preview URL too.
+
+Deploying publicly is safe: the page contains no credentials. The Client ID and
+tokens are entered and stored in each visitor's own browser, so anyone else who
+opens the URL just sees an empty setup screen.
+
+Note that the cache is per-browser. Syncing on your laptop does not populate
+your phone — each device syncs its own copy from Spotify.
 
 ### If Spotify returns 403
 
