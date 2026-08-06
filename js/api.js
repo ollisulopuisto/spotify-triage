@@ -105,30 +105,32 @@ export const api = {
     const fields = [
       'next',
       'total',
-      'items(added_at,is_local,track(id,uri,name,duration_ms,popularity,'
+      'items(added_at,is_local,item(id,uri,name,duration_ms,popularity,'
         + 'artists(id,name),album(id,name,release_date,images)))',
     ].join(',');
 
-    // `fields` trims the payload hard, but some accounts get a 403 back for
-    // filtered reads of playlists they can otherwise read. Fall back to the
-    // unfiltered request rather than lose the playlist.
+    // /items replaced /tracks in the March 2026 migration, and it caps limit
+    // at 50 where the old endpoint allowed 100.
     let items;
     try {
       items = await paged(
-        `/playlists/${playlistId}/tracks?limit=100&fields=${encodeURIComponent(fields)}`,
+        `/playlists/${playlistId}/items?limit=50&fields=${encodeURIComponent(fields)}`,
         onProgress,
       );
     } catch (err) {
       if (!(err instanceof SpotifyError) || err.status !== 403) throw err;
       console.warn('[crate] filtered read refused, retrying unfiltered:', playlistId);
-      items = await paged(`/playlists/${playlistId}/tracks?limit=100`, onProgress);
+      items = await paged(`/playlists/${playlistId}/items?limit=50`, onProgress);
       console.warn('[crate] unfiltered read succeeded:', playlistId);
     }
 
     return items
-      .filter((it) => it && it.track && it.track.id && !it.is_local)
+      // `item` is the current key; `track` is the deprecated alias still sent
+      // by unfiltered responses.
+      .map((it) => (it && !it.item && it.track ? { ...it, item: it.track } : it))
+      .filter((it) => it && it.item && it.item.id && !it.is_local)
       .map((it) => {
-        const t = it.track;
+        const t = it.item;
         const album = t.album || {};
         const images = album.images || [];
         return {
@@ -147,8 +149,10 @@ export const api = {
       });
   },
 
+  // The per-user path was retired along with /tracks; creation now hangs off
+  // the authenticated user directly.
   createPlaylist(userId, { name, description, isPublic }) {
-    return request(`/users/${encodeURIComponent(userId)}/playlists`, {
+    return request('/me/playlists', {
       method: 'POST',
       body: { name, description, public: Boolean(isPublic) },
     });
@@ -158,7 +162,7 @@ export const api = {
     for (let i = 0; i < uris.length; i += 100) {
       const batch = uris.slice(i, i + 100);
       // eslint-disable-next-line no-await-in-loop
-      await request(`/playlists/${playlistId}/tracks`, { method: 'POST', body: { uris: batch } });
+      await request(`/playlists/${playlistId}/items`, { method: 'POST', body: { uris: batch } });
       if (onProgress) onProgress(Math.min(i + batch.length, uris.length), uris.length);
     }
   },

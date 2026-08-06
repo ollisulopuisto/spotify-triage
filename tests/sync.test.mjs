@@ -85,7 +85,7 @@ async function installMock(page) {
 
     if (pathname === '/v1/me') return json(route, { id: 'me', display_name: 'Me' });
 
-    if (pathname === '/v1/me/playlists') {
+    if (pathname === '/v1/me/playlists' && route.request().method() === 'GET') {
       server.counters.catalog += 1;
       return json(route, {
         total: server.playlists.length,
@@ -102,7 +102,18 @@ async function installMock(page) {
       });
     }
 
-    const tracksMatch = pathname.match(/^\/v1\/playlists\/([^/]+)\/tracks$/);
+    // The March 2026 migration retired /tracks in favour of /items; the old
+    // path answers 403 for everyone now.
+    if (/^\/v1\/playlists\/[^/]+\/tracks$/.test(pathname)) {
+      return route.fulfill({
+        status: 403,
+        contentType: 'application/json',
+        headers: { 'Access-Control-Allow-Origin': '*' },
+        body: JSON.stringify({ error: { status: 403, message: 'Forbidden' } }),
+      });
+    }
+
+    const tracksMatch = pathname.match(/^\/v1\/playlists\/([^/]+)\/items$/);
     if (tracksMatch && route.request().method() === 'GET') {
       const id = tracksMatch[1];
       if (server.forbiddenWithFields.has(id) && url.searchParams.has('fields')) {
@@ -129,25 +140,36 @@ async function installMock(page) {
       const byPl = server.counters.trackFetchesByPlaylist;
       if (offset === 0) byPl[id] = (byPl[id] || 0) + 1;
 
+      // /items caps limit at 50, unlike the old /tracks endpoint's 100.
+      if (limit > 50) {
+        return route.fulfill({
+          status: 400,
+          contentType: 'application/json',
+          headers: { 'Access-Control-Allow-Origin': '*' },
+          body: JSON.stringify({ error: { status: 400, message: 'Invalid limit' } }),
+        });
+      }
+
       const items = [];
       for (let i = offset; i < Math.min(offset + limit, pl.count); i += 1) {
         items.push({
           added_at: `2019-0${pl.id === 'p1' ? 1 : 2}-1${i % 9}T10:00:00Z`,
           is_local: false,
-          track: makeTrack(i, i % 4),
+          // `item` is the current key; `track` is deprecated and absent here.
+          item: makeTrack(i, i % 4),
         });
       }
       const nextOffset = offset + limit;
       return json(route, {
         total: pl.count,
         next: nextOffset < pl.count
-          ? `https://api.spotify.com/v1/playlists/${id}/tracks?offset=${nextOffset}&limit=${limit}`
+          ? `https://api.spotify.com/v1/playlists/${id}/items?offset=${nextOffset}&limit=${limit}`
           : null,
         items,
       });
     }
 
-    if (pathname === '/v1/users/me/playlists' && route.request().method() === 'POST') {
+    if (pathname === '/v1/me/playlists' && route.request().method() === 'POST') {
       const body = route.request().postDataJSON();
       server.counters.created.push(body);
       return json(route, {
@@ -155,7 +177,7 @@ async function installMock(page) {
       });
     }
 
-    if (pathname === '/v1/playlists/new1/tracks' && route.request().method() === 'POST') {
+    if (pathname === '/v1/playlists/new1/items' && route.request().method() === 'POST') {
       server.counters.added.push(route.request().postDataJSON().uris);
       return json(route, { snapshot_id: 'z1' });
     }
@@ -222,8 +244,9 @@ test('the first sync paginates through every selected playlist', async () => {
   await page.click('#btnPickerSave');
   await waitForSync(page);
 
-  // p1 has 150 tracks => 2 pages; p2 has 10 => 1 page. p3 was not selected.
-  assert.equal(server.counters.trackPages, 3);
+  // At the 50-item cap p1's 150 tracks take 3 pages; p2's 10 take 1. p3 was
+  // not selected.
+  assert.equal(server.counters.trackPages, 4);
   assert.deepEqual(server.counters.trackFetchesByPlaylist, { p1: 1, p2: 1 });
 
   await page.waitForSelector('.album');
