@@ -7,6 +7,23 @@ const BASE = 'https://api.spotify.com/v1';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// A silent backoff is indistinguishable from a hang, so the UI gets to narrate
+// it. Set by main.js; a no-op everywhere else (tests, future callers).
+let onWait = null;
+export function setWaitReporter(fn) {
+  onWait = fn;
+}
+
+// Count down out loud, one second at a time.
+async function waitOut(seconds) {
+  for (let left = seconds; left > 0; left -= 1) {
+    if (onWait) onWait(left);
+    // eslint-disable-next-line no-await-in-loop
+    await sleep(1000);
+  }
+  if (onWait) onWait(0);
+}
+
 export class SpotifyError extends Error {
   constructor(status, message) {
     super(message);
@@ -34,7 +51,8 @@ async function request(path, { method = 'GET', body = null, retriedAuth = false,
   if (res.status === 429) {
     // Spotify tells us exactly how long to wait; honour it rather than guessing.
     const wait = Number(res.headers.get('Retry-After') || 2) + 1;
-    await sleep(wait * 1000);
+    console.warn(`[crate] rate-limited, waiting ${wait}s before retrying`, url.replace(BASE, ''));
+    await waitOut(wait);
     return request(path, { method, body, retriedAuth, attempt });
   }
 

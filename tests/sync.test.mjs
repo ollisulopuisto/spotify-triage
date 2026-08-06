@@ -43,6 +43,7 @@ const server = {
   forbidden: new Set(),
   // Playlist IDs that 403 only when the request carries a `fields` filter.
   forbiddenWithFields: new Set(),
+  rateLimitOnce: false,
   devices: [
     { id: 'dev1', name: 'Olli’s MacBook', type: 'Computer', is_active: true },
     { id: 'dev2', name: 'Kitchen speaker', type: 'Speaker', is_active: false },
@@ -115,6 +116,16 @@ async function installMock(page) {
     }
 
     if (pathname === '/v1/me/playlists' && route.request().method() === 'GET') {
+      // Rate-limit the next catalog read once, the way Spotify does.
+      if (server.rateLimitOnce) {
+        server.rateLimitOnce = false;
+        return route.fulfill({
+          status: 429,
+          contentType: 'application/json',
+          headers: { 'Access-Control-Allow-Origin': '*', 'Retry-After': '2' },
+          body: JSON.stringify({ error: { status: 429, message: 'Too Many Requests' } }),
+        });
+      }
       server.counters.catalog += 1;
       return json(route, {
         total: server.playlists.length,
@@ -230,7 +241,7 @@ test.before(async () => {
     // induces 403s on purpose, so that line is expected, not a defect.
     // Chromium logs the bare status line and the app logs its own 403 detail;
     // the forbidden-playlist tests induce both deliberately.
-    const expected = /Failed to load resource.*403/.test(m.text())
+    const expected = /Failed to load resource.*(403|429)/.test(m.text())
       || /^\[crate\] 403 /.test(m.text());
     if (m.type() === 'error' && !expected) {
       errors.push(m.text());
@@ -473,6 +484,25 @@ test('the picker separates what is already in the crate from what is not', async
 
   await page.click('#btnPickerClose');
   await page.waitForSelector('#pickerBackdrop[hidden]', { state: 'hidden' });
+});
+
+test('a rate-limited sync says it is waiting instead of looking hung', async () => {
+  await clearBanner(page);
+  server.rateLimitOnce = true;
+  await page.click('#btnSync');
+
+  // The progress dialog has to name the wait, or a 429 is indistinguishable
+  // from a hang.
+  await page.waitForFunction(
+    () => /rate.?limited/i.test(document.getElementById('progressText').textContent),
+    null,
+    { timeout: 10000 },
+  );
+  const text = await page.textContent('#progressText');
+  assert.match(text, /\d+\s*s/, 'it counts down in seconds');
+
+  await waitForSync(page);
+  assert.match(await page.textContent('#banner'), /Synced/, 'and then it recovers');
 });
 
 test('nothing threw along the way', () => {

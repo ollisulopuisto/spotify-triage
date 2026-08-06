@@ -1,5 +1,5 @@
 import { db } from './db.js';
-import { api, SpotifyError } from './api.js';
+import { api, SpotifyError, setWaitReporter } from './api.js';
 import * as auth from './auth.js';
 import {
   buildLibrary, groupAlbums, search, sortResults, facets, SORTS,
@@ -147,6 +147,21 @@ function setProgress(text, done, total) {
 function hideProgress() {
   $('progressBackdrop').hidden = true;
 }
+
+// Spotify's backoff can run for minutes. Say so, and put the old line back
+// afterwards so the caller's own progress text is not lost.
+let textBeforeWait = null;
+setWaitReporter((secondsLeft) => {
+  const el = $('progressText');
+  if (!el) return;
+  if (secondsLeft > 0) {
+    if (textBeforeWait === null) textBeforeWait = el.textContent;
+    el.textContent = `Spotify rate-limited us — retrying in ${secondsLeft}s`;
+  } else {
+    el.textContent = textBeforeWait || '';
+    textBeforeWait = null;
+  }
+});
 
 // --- sync ------------------------------------------------------------------
 
