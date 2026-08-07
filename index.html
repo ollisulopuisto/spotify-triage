@@ -28,30 +28,64 @@
 
 <!-- Setup / sign-in -->
 <section id="setup" class="setup" hidden>
-  <h2>One-time setup</h2>
-  <p class="muted">
-    Crate talks to Spotify directly from this browser tab. There is no server and
-    nothing is uploaded anywhere — your playlists are cached in this browser only.
-    To let it in, Spotify needs you to register a (free) app and paste its ID here.
+  <h2>Search years of monthly playlists as one library</h2>
+  <p class="lede">
+    If you file the music you listen to into a playlist per month, you end up with
+    an archive sorted by nothing but time. Crate reads those playlists once, groups
+    the tracks back into albums, and makes the whole thing searchable — by artist,
+    album, year, or which month you filed it in.
   </p>
+
+  <ul class="reassure">
+    <li><b>Nothing leaves your browser.</b> There is no server. Your playlists are cached locally and the code is <a href="https://github.com/ollisulopuisto/spotify-triage" target="_blank" rel="noreferrer">open source</a>.</li>
+    <li><b>Nothing is modified.</b> Crate only reads, unless you explicitly export a playlist or press play.</li>
+    <li><b>You need Spotify Premium.</b> Spotify requires it for API access of this kind, and for playback control.</li>
+  </ul>
+
+  <h3 class="setup-h">Setup — about five minutes, once</h3>
+  <p class="muted">
+    Spotify only lets an app serve five named people unless it is a registered
+    business with 250,000 users, so there is no shared sign-in button. Instead you
+    register your own free app; it takes a few clicks and it is yours.
+  </p>
+
   <ol class="steps">
-    <li>Open the <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noreferrer">Spotify developer dashboard</a> and click <b>Create app</b>. Any name will do.</li>
     <li>
-      Set the <b>Redirect URI</b> to exactly this, and click <b>Add</b>:
+      Open the <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noreferrer">Spotify developer dashboard</a>
+      and click <b>Create app</b>. Any name and description will do.
+    </li>
+    <li>
+      Paste this exact string into <b>Redirect URIs</b>, then click <b>Add</b>:
       <div class="copyrow">
         <code id="redirectUri"></code>
         <button id="btnCopyRedirect" class="btn btn-small">Copy</button>
       </div>
-      <span class="hint" id="redirectHint"></span>
+      <span class="hint" id="redirectHint">The trailing slash matters — Spotify matches it character for character.</span>
     </li>
-    <li>Under <b>Which API/SDKs are you planning to use?</b> tick <b>Web API</b>, then save.</li>
-    <li>Open the app's <b>Settings</b>, copy the <b>Client ID</b>, and paste it here:</li>
+    <li>Under <b>Which API/SDKs are you planning to use?</b> tick <b>Web API</b>.</li>
+    <li>Accept the terms and click <b>Save</b>.</li>
+    <li>
+      Open the app's <b>Settings</b> and copy the <b>Client ID</b>. It is 32 characters
+      and is not a secret — there is no client secret to handle here.
+    </li>
+    <li>
+      Still in Settings, open <b>User Management</b> and add your own name and the
+      email address on your Spotify account. Without this Spotify answers every
+      request with a 403.
+    </li>
   </ol>
+
   <div class="copyrow">
     <input id="clientId" type="text" spellcheck="false" autocomplete="off"
-           placeholder="Client ID (32 hex characters)">
+           placeholder="Paste your Client ID (32 characters)" aria-describedby="clientIdHint">
     <button id="btnSignIn" class="btn btn-primary">Sign in with Spotify</button>
   </div>
+  <span class="hint" id="clientIdHint"></span>
+
+  <p class="muted setup-foot">
+    Next you will pick which playlists belong in your crate, and Crate will read
+    them once. After that everything is instant and works offline.
+  </p>
 </section>
 
 <!-- Main app -->

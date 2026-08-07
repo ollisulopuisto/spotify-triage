@@ -1042,11 +1042,39 @@ function wire() {
   if (window.location.protocol === 'file:') {
     $('redirectHint').textContent = 'Heads up: Spotify will not accept a file:// redirect. '
       + 'Serve this folder over http://127.0.0.1 instead — see the README.';
+    $('redirectHint').className = 'hint bad';
   } else if (!/^https:|^http:\/\/(127\.0\.0\.1|\[::1\])/.test(window.location.origin)) {
     $('redirectHint').textContent = 'Spotify only accepts https:// or http://127.0.0.1 redirect URIs.';
+    $('redirectHint').className = 'hint bad';
   }
 
   $('clientId').value = auth.getClientId();
+
+  // Say what is wrong while they are still looking at the field, rather than
+  // after a failed round trip to Spotify.
+  const checkClientId = () => {
+    const raw = $('clientId').value.trim();
+    const hint = $('clientIdHint');
+    if (!raw) {
+      hint.textContent = '';
+      hint.className = 'hint';
+    } else if (/^[0-9a-f]{32}$/i.test(raw)) {
+      hint.textContent = 'Looks right.';
+      hint.className = 'hint ok';
+    } else if (raw.startsWith('http')) {
+      hint.textContent = 'That is a URL — you want the Client ID from the app\u2019s Settings page.';
+      hint.className = 'hint bad';
+    } else {
+      hint.textContent = `A Client ID is 32 letters and digits; this is ${raw.length}.`;
+      hint.className = 'hint bad';
+    }
+    return /^[0-9a-f]{32}$/i.test(raw);
+  };
+  $('clientId').addEventListener('input', checkClientId);
+  $('clientId').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') $('btnSignIn').click();
+  });
+  checkClientId();
 
   $('btnCopyRedirect').onclick = async () => {
     await navigator.clipboard.writeText(auth.redirectUri());
@@ -1055,8 +1083,11 @@ function wire() {
 
   $('btnSignIn').onclick = async () => {
     const id = $('clientId').value.trim();
-    if (!/^[0-9a-f]{32}$/i.test(id)) {
-      banner('That does not look like a Spotify client ID (32 hex characters).');
+    if (!checkClientId()) {
+      $('clientId').focus();
+      banner(id
+        ? 'That does not look like a Spotify Client ID (32 letters and digits).'
+        : 'Paste your Client ID first — step 5 above.');
       return;
     }
     auth.setClientId(id);

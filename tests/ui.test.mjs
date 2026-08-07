@@ -146,6 +146,41 @@ test('signed-out visitors get setup instructions with the exact redirect URI', a
   await fresh.goto(`${BASE_URL}?t=setup`);
   await fresh.waitForSelector('#setup:not([hidden])');
   assert.equal(await fresh.textContent('#redirectUri'), `${BASE_URL}/`);
+
+  // A stranger needs to know what this is, that it is safe, and that Premium
+  // is required — before being asked to register anything.
+  const copy = await fresh.textContent('#setup');
+  assert.match(copy, /Premium/, 'the Premium requirement is stated up front');
+  assert.match(copy, /Nothing leaves your browser/i, 'the privacy claim is made');
+  assert.match(copy, /User Management/, 'the allowlist step is included');
+
+  await fresh.close();
+});
+
+test('the Client ID field explains what is wrong before you submit', async () => {
+  const fresh = await browser.newPage();
+  await fresh.goto(`${BASE_URL}?t=validate`);
+  await fresh.waitForSelector('#setup:not([hidden])');
+
+  await fresh.fill('#clientId', 'https://open.spotify.com/');
+  await fresh.waitForFunction(() => /URL/.test(document.getElementById('clientIdHint').textContent));
+
+  await fresh.fill('#clientId', 'abc123');
+  await fresh.waitForFunction(() => /32 letters and digits/.test(
+    document.getElementById('clientIdHint').textContent,
+  ));
+
+  // Submitting a bad ID must not navigate away to Spotify.
+  await fresh.click('#btnSignIn');
+  await fresh.waitForSelector('#banner:not([hidden])');
+  assert.match(await fresh.textContent('#banner'), /Client ID/);
+  assert.ok(fresh.url().startsWith(BASE_URL), 'stayed on the page');
+
+  await fresh.fill('#clientId', 'a'.repeat(32));
+  await fresh.waitForFunction(() => /Looks right/.test(
+    document.getElementById('clientIdHint').textContent,
+  ));
+
   await fresh.close();
 });
 

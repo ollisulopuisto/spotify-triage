@@ -334,3 +334,24 @@ a.album-title:hover { color: var(--accent); text-decoration: underline; }
 .alpha:hover:not(:disabled) { background: var(--bg-raised); color: var(--text); }
 .alpha.is-on { background: var(--accent); border-color: var(--accent); color: #04160c; }
 .alpha.is-empty { opacity: 0.28; cursor: default; }
+
+/* --- onboarding --------------------------------------------------------- */
+
+.setup h2 { font-size: 24px; line-height: 1.25; margin-bottom: 12px; }
+.setup .lede { font-size: 16px; color: var(--text); margin: 0 0 18px; max-width: 62ch; }
+.setup-h { margin-top: 26px; font-size: 12px; }
+.setup-foot { margin-top: 18px; font-size: 13px; }
+
+.reassure { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 8px; max-width: 62ch; }
+.reassure li {
+  font-size: 14px; color: var(--muted);
+  padding-left: 22px; position: relative;
+}
+/* A tick per promise: the claims are the reason to trust the page at all. */
+.reassure li::before {
+  content: "✓"; position: absolute; left: 0; top: 0; color: var(--accent); font-weight: 700;
+}
+.reassure b { color: var(--text); font-weight: 600; }
+
+.hint.ok { color: var(--accent); }
+.hint.bad { color: var(--danger); }
