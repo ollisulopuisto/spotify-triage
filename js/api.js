@@ -72,6 +72,16 @@ const LS_LOCKOUTS = 'crate.lockouts';
 let gapMs = 0;
 let cleanRun = 0;
 
+// A floor applied during bulk work. A first sync of ~200 playlists is several
+// hundred requests, and Spotify allows roughly 180 per rolling 30 seconds, so
+// bursting is guaranteed to trip it — pace from the start rather than react to
+// a 429 after the damage is done. 250ms is ~4/s, comfortably under the ceiling.
+export const BULK_PACING_MS = 250;
+let basePacing = 0;
+export function setPacing(ms) {
+  basePacing = Math.max(0, ms || 0);
+}
+
 function easeOff() {
   gapMs = Math.min(gapMs * 2 + 250, 2000);
   cleanRun = 0;
@@ -126,7 +136,8 @@ async function request(path, {
   }
 
   throwIfCancelled();
-  if (gapMs) await sleep(gapMs);
+  const wait = Math.max(gapMs, basePacing);
+  if (wait) await sleep(wait);
   throwIfCancelled();
 
   const token = await getAccessToken({ force: retriedAuth });

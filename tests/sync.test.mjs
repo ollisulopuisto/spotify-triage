@@ -58,6 +58,7 @@ const server = {
     added: [],
     played: [],
     queued: [],
+    stamps: [],
   },
 };
 
@@ -95,6 +96,7 @@ async function installMock(page) {
   }));
 
   await page.route('**://api.spotify.com/**', async (route) => {
+    server.counters.stamps.push(Date.now());
     const url = new URL(route.request().url());
     const { pathname } = url;
 
@@ -670,6 +672,25 @@ test('Escape closes the action sheet', async () => {
   await page.waitForSelector('#sheetBackdrop:not([hidden])');
   await page.keyboard.press('Escape');
   await page.waitForSelector('#sheetBackdrop[hidden]', { state: 'hidden' });
+});
+
+test('a bulk sync paces itself instead of bursting into the rate limit', async () => {
+  // A first sync on a new device is hundreds of requests. Spotify allows about
+  // 180 per 30s, so an unpaced burst is limited before it finishes.
+  await clearBanner(page);
+  await page.evaluate(() => localStorage.removeItem('crate.cooldownUntil'));
+  server.playlists.forEach((p, i) => { p.snapshot = `paced-${i}`; });
+  server.counters.stamps = [];
+
+  await page.click('#btnSync');
+  await waitForSync(page);
+
+  const stamps = server.counters.stamps;
+  assert.ok(stamps.length >= 4, `expected several requests, got ${stamps.length}`);
+
+  const gaps = stamps.slice(1).map((t, i) => t - stamps[i]);
+  const tooFast = gaps.filter((g) => g < 100).length;
+  assert.equal(tooFast, 0, `every request should be spaced; gaps were ${gaps.join(',')}`);
 });
 
 test('nothing threw along the way', () => {

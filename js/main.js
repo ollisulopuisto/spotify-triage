@@ -1,7 +1,7 @@
 import { db } from './db.js';
 import {
   api, SpotifyError, setWaitReporter, cooldownRemaining, describeDuration,
-  cancelInFlight, resetCancel,
+  cancelInFlight, resetCancel, setPacing, BULK_PACING_MS,
 } from './api.js';
 import * as auth from './auth.js';
 import {
@@ -196,12 +196,14 @@ async function fetchCatalog() {
     );
   }
   showProgress('Reading your playlists');
+  setPacing(BULK_PACING_MS);
   try {
     state.catalog = await api.myPlaylists((n, total) => {
       setProgress(`${n} of ${total || '?'} playlists`, n, total);
     });
     await db.setMeta('catalog', state.catalog);
   } finally {
+    setPacing(0);
     hideProgress();
   }
   return state.catalog;
@@ -225,6 +227,20 @@ async function sync({ full = false } = {}) {
   }
 
   showProgress('Syncing your crate');
+  setPacing(BULK_PACING_MS);
+
+  // A first sync on a new device fetches everything. Say why it is slow before
+  // the silence starts looking like a hang.
+  const firstRun = state.cached.length === 0 && wanted.length > 10;
+  if (firstRun) {
+    const mins = Math.max(1, Math.round((wanted.length * 2 * BULK_PACING_MS) / 60000));
+    setProgress(
+      `First sync of ${plural(wanted.length, 'playlist', 'playlists')} — deliberately`
+      + ` paced to stay under Spotify's rate limit. Roughly ${mins} min. Leave this open.`,
+      0,
+      0,
+    );
+  }
 
   try {
     if (!state.catalog.length) {
@@ -314,6 +330,7 @@ async function sync({ full = false } = {}) {
   } catch (err) {
     banner(describeError(err));
   } finally {
+    setPacing(0);
     hideProgress();
     render();
   }
