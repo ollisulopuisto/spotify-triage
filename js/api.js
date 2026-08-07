@@ -211,6 +211,16 @@ async function request(path, {
   return data;
 }
 
+// Spotify's own `next` link for /me/playlists points at /users/{id}/playlists,
+// a path the March 2026 migration retired — following it verbatim 403s on page
+// two. Keep the query, move it back to the endpoint that still exists.
+function reviveNext(url) {
+  return String(url || '').replace(
+    /(https:\/\/api\.spotify\.com)\/v1\/users\/[^/]+\/playlists\b/,
+    '$1/v1/me/playlists',
+  );
+}
+
 // Walk a paged endpoint to exhaustion, reporting progress as it goes.
 async function paged(path, onPage) {
   let next = path;
@@ -222,7 +232,7 @@ async function paged(path, onPage) {
     if (!page) break;
     out.push(...(page.items || []));
     if (onPage) onPage(out.length, page.total);
-    next = page.next;
+    next = reviveNext(page.next);
   }
   return out;
 }

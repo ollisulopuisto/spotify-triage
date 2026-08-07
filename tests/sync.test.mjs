@@ -133,10 +133,16 @@ async function installMock(page) {
         });
       }
       server.counters.catalog += 1;
+      const offset = Number(url.searchParams.get('offset') || 0);
+      // Spotify hands back a `next` that points at /users/{id}/playlists, a
+      // path the March 2026 migration retired. Page 2 only exists there.
+      const page = offset > 0 ? server.playlists.slice(1) : server.playlists.slice(0, 1);
       return json(route, {
         total: server.playlists.length,
-        next: null,
-        items: server.playlists.map((p) => ({
+        next: offset > 0
+          ? null
+          : `https://api.spotify.com/v1/users/dst/playlists?offset=1&limit=50`,
+        items: page.map((p) => ({
           id: p.id,
           name: p.name,
           snapshot_id: p.snapshot,
@@ -145,6 +151,15 @@ async function installMock(page) {
           images: [],
           external_urls: { spotify: `${BASE_URL}/#${p.id}` },
         })),
+      });
+    }
+
+    if (/^\/v1\/users\/[^/]+\/playlists$/.test(pathname)) {
+      return route.fulfill({
+        status: 403,
+        contentType: 'application/json',
+        headers: { 'Access-Control-Allow-Origin': '*' },
+        body: JSON.stringify({ error: { status: 403, message: 'Forbidden' } }),
       });
     }
 
@@ -313,7 +328,8 @@ test('re-syncing an unchanged crate fetches no tracks at all', async () => {
   await page.click('#btnSync');
   await waitForSync(page);
 
-  assert.equal(server.counters.catalog, 1, 'the catalog is still checked');
+  // Two pages: the second is reached by rewriting Spotify's retired `next`.
+  assert.equal(server.counters.catalog, 2, 'the catalog is still checked');
   assert.equal(server.counters.trackPages, 0, 'but no playlist is re-read');
   assert.match(await page.textContent('#banner'), /0 refetched, 2 unchanged/);
 });
