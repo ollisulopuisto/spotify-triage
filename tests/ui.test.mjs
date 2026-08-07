@@ -371,6 +371,31 @@ test('browsing by album re-buckets on the album name', async () => {
   await page.waitForFunction(() => document.querySelectorAll('.album').length === 6);
 });
 
+test('the picker shows a full year of months without scrolling', async () => {
+  // A 13" MacBook viewport. Twelve rows is the point: a year at a glance.
+  await page.setViewportSize({ width: 1470, height: 830 });
+  await page.click('#btnPlaylists');
+  await page.waitForSelector('.picker-row');
+
+  const visible = await page.evaluate(() => {
+    const box = document.getElementById('pickerList').getBoundingClientRect();
+    return [...document.querySelectorAll('.picker-row')].filter((r) => {
+      const b = r.getBoundingClientRect();
+      return b.top >= box.top - 0.5 && b.bottom <= box.bottom + 0.5;
+    }).length;
+  });
+  assert.ok(visible >= 12, `expected 12+ rows in view, got ${visible}`);
+
+  // The modal itself must still fit the viewport rather than overflow it.
+  const fits = await page.evaluate(() => {
+    const m = document.querySelector('#pickerBackdrop .modal').getBoundingClientRect();
+    return m.top >= -0.5 && m.bottom <= window.innerHeight + 0.5;
+  });
+  assert.ok(fits, 'the modal fits on screen');
+
+  await page.click('#btnPickerClose');
+});
+
 test('nothing threw along the way', () => {
   assert.deepEqual(consoleErrors, []);
 });
