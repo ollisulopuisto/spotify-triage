@@ -197,7 +197,8 @@ test('a synced crate renders as albums, deduplicated across months', async () =>
 
 test('an album filed in many months says so', async () => {
   const pill = page.locator('.album', { hasText: 'Kid A' }).locator('.pill.hot');
-  assert.match(await pill.textContent(), /filed \d+×/);
+  // Says how many months, rather than an unexplained "filed 2×".
+  assert.match(await pill.textContent(), /in \d+ months/);
 });
 
 test('free-text search narrows the grid', async () => {
@@ -316,7 +317,9 @@ test('surprise me shuffles without losing anything', async () => {
 });
 
 test('pressing / focuses the search box', async () => {
-  await page.locator('body').click();
+  // Click somewhere inert: the middle of the body is now a cover, and covers
+  // open the action sheet.
+  await page.locator('.topbar h1').click();
   await page.keyboard.press('/');
   assert.equal(await page.evaluate(() => document.activeElement.id), 'q');
 });
@@ -429,6 +432,64 @@ test('the picker shows a full year of months without scrolling', async () => {
   assert.ok(fits, 'the modal fits on screen');
 
   await page.click('#btnPickerClose');
+});
+
+test('the action sheet works on a phone', async () => {
+  // iPhone-ish viewport.
+  await page.setViewportSize({ width: 390, height: 700 });
+  await page.click('#btnReset');
+  await page.waitForSelector('.album');
+
+  await page.locator('.album .album-art').first().click();
+  await page.waitForSelector('#sheetBackdrop:not([hidden])');
+
+  const fits = await page.evaluate(() => {
+    const m = document.querySelector('#sheetBackdrop .modal').getBoundingClientRect();
+    const play = document.getElementById('sheetPlay').getBoundingClientRect();
+    return {
+      onScreen: m.left >= -0.5 && m.right <= window.innerWidth + 0.5
+        && m.bottom <= window.innerHeight + 0.5,
+      // Anchored to the bottom, where a thumb reaches.
+      atBottom: Math.abs(m.bottom - window.innerHeight) < 2,
+      tapHeight: play.height,
+    };
+  });
+  assert.ok(fits.onScreen, 'the sheet fits the viewport');
+  assert.ok(fits.atBottom, 'the sheet sits at the bottom of the screen');
+  assert.ok(fits.tapHeight >= 44, `tap targets are at least 44px, got ${fits.tapHeight}`);
+
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('#sheetBackdrop[hidden]', { state: 'hidden' });
+  await page.setViewportSize({ width: 1280, height: 720 });
+});
+
+test('the UI calls itself Personal Spotify', async () => {
+  assert.equal(await page.textContent('.topbar h1'), 'Personal Spotify');
+  assert.match(await page.title(), /Personal Spotify/);
+});
+
+test('browsing by year filed uses Spotify\u2019s own added_at dates', async () => {
+  await page.click('#btnReset');
+  await page.waitForSelector('.album');
+  await page.selectOption('#alphaKey', 'filed');
+  await page.waitForFunction(() => {
+    const labels = [...document.querySelectorAll('.alpha')].map((b) => b.textContent);
+    return labels.length > 1 && labels.slice(1).every((l) => /^(\d{4}|\u2014)$/.test(l));
+  });
+
+  const years = await page.locator('.alpha:not(:text-is("All"))').allTextContents();
+  // Newest first: the rail reads like a timeline, not an alphabet.
+  assert.deepEqual(years, [...years].sort().reverse(), 'years run newest first');
+  assert.ok(years.includes('2019'), `expected 2019 among ${years.join(',')}`);
+
+  await page.click('.alpha:text-is("2019")');
+  await page.waitForFunction(() => document.querySelectorAll('.album').length > 0);
+  const shown = await page.locator('.album').count();
+  assert.ok(shown > 0, 'the year bucket has albums in it');
+
+  await page.click('#btnReset');
+  await page.selectOption('#alphaKey', 'artist');
+  await showsAlbums(page, ALL_ALBUMS);
 });
 
 test('nothing threw along the way', () => {

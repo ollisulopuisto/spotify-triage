@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import {
   normalize, buildLibrary, groupAlbums, parseQuery, search, sortResults, facets,
   initialOf, alphaCounts, byInitial,
+  artUrl, filedYearOf, yearCounts, byBucket,
 } from '../js/library.js';
 
 function track(over = {}) {
@@ -312,4 +313,30 @@ test('the rail runs A-Z then A, A, O, the way Finnish sorts', () => {
   assert.equal(counts.get('Ä'), 1);
   assert.equal(counts.get('Ö'), 1);
   assert.equal(counts.get('A'), 1, 'Aalto stays under A');
+});
+
+test('album art URLs can be upgraded without refetching', () => {
+  const small = 'https://i.scdn.co/image/ab67616d00004851abc123';
+  assert.equal(artUrl(small, 'medium'), 'https://i.scdn.co/image/ab67616d00001e02abc123');
+  assert.equal(artUrl(small, 'large'), 'https://i.scdn.co/image/ab67616d0000b273abc123');
+  // Anything unexpected is passed through rather than mangled.
+  assert.equal(artUrl(null), null);
+  assert.equal(artUrl('https://example.com/x.jpg'), 'https://example.com/x.jpg');
+});
+
+test('filing years bucket by when something first entered the crate', () => {
+  const items = [
+    { firstAdded: '2019-03-04T10:00:00Z' },
+    { firstAdded: '2019-11-04T10:00:00Z' },
+    { firstAdded: '2022-01-04T10:00:00Z' },
+    { firstAdded: null, lastAdded: null },
+  ];
+  assert.equal(filedYearOf(items[0]), '2019');
+  assert.equal(filedYearOf(items[3]), '—');
+
+  const counts = yearCounts(items);
+  assert.deepEqual([...counts.keys()], ['2022', '2021', '2020', '2019', '—'], 'newest first, gaps kept');
+  assert.equal(counts.get('2019'), 2);
+  assert.equal(counts.get('2021'), 0, 'a year with nothing filed still shows');
+  assert.deepEqual(byBucket(items, '2019', filedYearOf).length, 2);
 });

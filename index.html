@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Crate — search your monthly playlists</title>
+<title>Personal Spotify — search your monthly playlists</title>
 <link rel="stylesheet" href="app.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🗃️</text></svg>">
 </head>
@@ -13,7 +13,7 @@
   <div class="brand">
     <span class="brand-mark">🗃️</span>
     <div>
-      <h1>Crate</h1>
+      <h1>Personal Spotify</h1>
       <p class="brand-sub" id="brandSub">your monthly playlists, as one library</p>
     </div>
   </div>
@@ -31,14 +31,14 @@
   <h2>Search years of monthly playlists as one library</h2>
   <p class="lede">
     If you file the music you listen to into a playlist per month, you end up with
-    an archive sorted by nothing but time. Crate reads those playlists once, groups
+    an archive sorted by nothing but time. Personal Spotify reads those playlists once, groups
     the tracks back into albums, and makes the whole thing searchable — by artist,
     album, year, or which month you filed it in.
   </p>
 
   <ul class="reassure">
     <li><b>Nothing leaves your browser.</b> There is no server. Your playlists are cached locally and the code is <a href="https://github.com/ollisulopuisto/spotify-triage" target="_blank" rel="noreferrer">open source</a>.</li>
-    <li><b>Nothing is modified.</b> Crate only reads, unless you explicitly export a playlist or press play.</li>
+    <li><b>Nothing is modified.</b> It only reads, unless you explicitly export a playlist or press play.</li>
     <li><b>You need Spotify Premium.</b> Spotify requires it for API access of this kind, and for playback control.</li>
   </ul>
 
@@ -83,7 +83,7 @@
   <span class="hint" id="clientIdHint"></span>
 
   <p class="muted setup-foot">
-    Next you will pick which playlists belong in your crate, and Crate will read
+    Next you will pick which playlists belong in your crate, and it will read
     them once. After that everything is instant and works offline.
   </p>
 </section>
@@ -129,6 +129,7 @@
         <option value="artist">by artist</option>
         <option value="album">by album</option>
         <option value="track">by track</option>
+        <option value="filed">by year filed</option>
       </select>
     </label>
     <div id="alphaRail" class="alpha-rail" role="group" aria-label="Jump to letter"></div>
@@ -196,6 +197,30 @@
     <footer class="modal-foot">
       <span id="pickerCount" class="muted"></span>
       <button id="btnPickerSave" class="btn btn-primary">Save and sync</button>
+    </footer>
+  </div>
+</div>
+
+<!-- Album action sheet -->
+<div id="sheetBackdrop" class="backdrop" hidden>
+  <div class="modal modal-sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+    <header class="sheet-head">
+      <img id="sheetArt" class="sheet-art" alt="" hidden>
+      <div class="sheet-id">
+        <h2 id="sheetTitle"></h2>
+        <p id="sheetArtist" class="muted"></p>
+      </div>
+    </header>
+    <div class="sheet-actions">
+      <button id="sheetPlay" class="btn btn-primary btn-sheet">▶  Play now</button>
+      <button id="sheetQueue" class="btn btn-sheet">＋  Add to queue</button>
+      <button id="sheetSelect" class="btn btn-sheet"></button>
+      <button id="sheetTracks" class="btn btn-sheet"></button>
+      <a id="sheetOpen" class="btn btn-sheet" target="_blank" rel="noreferrer">Open in Spotify</a>
+    </div>
+    <footer class="modal-foot">
+      <span></span>
+      <button id="sheetClose" class="btn btn-quiet btn-small">Close</button>
     </footer>
   </div>
 </div>

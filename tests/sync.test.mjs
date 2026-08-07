@@ -628,6 +628,50 @@ test('a single 429 is remembered, so reloading does not fire more requests', asy
   server.rateLimitRetryAfter = 2;
 });
 
+test('tapping the cover opens an action sheet that can play or queue', async () => {
+  server.counters.played = [];
+  server.counters.queued = [];
+  await clearBanner(page);
+  await page.click('#btnReset');
+  await page.waitForSelector('.album');
+
+  // The whole cover is the target, not the small tick.
+  await page.locator('.album .album-art').first().click();
+  await page.waitForSelector('#sheetBackdrop:not([hidden])');
+
+  await page.click('#sheetPlay');
+  await page.waitForSelector('#sheetBackdrop[hidden]', { state: 'hidden' });
+  assert.equal(server.counters.played.length, 1, 'played from the sheet');
+
+  await page.locator('.album .album-art').first().click();
+  await page.waitForSelector('#sheetBackdrop:not([hidden])');
+  await page.click('#sheetQueue');
+  await page.waitForFunction(() => /[Qq]ueued/.test(document.getElementById('banner').textContent));
+  assert.ok(server.counters.queued.length >= 1, 'queued from the sheet');
+});
+
+test('the sheet can select the album, and the tick still works on its own', async () => {
+  await page.click('#btnClearSel').catch(() => {});
+  await page.locator('.album .album-art').first().click();
+  await page.waitForSelector('#sheetBackdrop:not([hidden])');
+  await page.click('#sheetSelect');
+  await page.waitForSelector('#sheetBackdrop[hidden]', { state: 'hidden' });
+  await page.waitForSelector('#selectionInfo:not([hidden])');
+
+  // The tick keeps its own click for fast multi-select: it must not open a sheet.
+  await page.locator('.album .tick').nth(1).click();
+  assert.equal(await page.isHidden('#sheetBackdrop'), true, 'tick did not open the sheet');
+
+  await page.click('#btnClearSel');
+});
+
+test('Escape closes the action sheet', async () => {
+  await page.locator('.album .album-art').first().click();
+  await page.waitForSelector('#sheetBackdrop:not([hidden])');
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('#sheetBackdrop[hidden]', { state: 'hidden' });
+});
+
 test('nothing threw along the way', () => {
   assert.deepEqual(errors, []);
 });

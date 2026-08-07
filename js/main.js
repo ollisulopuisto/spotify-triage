@@ -6,7 +6,7 @@ import {
 import * as auth from './auth.js';
 import {
   buildLibrary, groupAlbums, search, sortResults, facets, SORTS,
-  alphaCounts, byInitial,
+  alphaCounts, initialOf, artUrl, filedYearOf, yearCounts, byBucket,
 } from './library.js';
 
 // --- tiny DOM helper -------------------------------------------------------
@@ -96,6 +96,13 @@ function alphaNameOf(item) {
   if (state.alphaKey === 'artist') return item.artistLine || '';
   if (state.alphaKey === 'album') return item.albumName || item.name || '';
   return item.name || '';
+}
+
+// The rail bucket an item belongs to: a letter, or a filing year. `added_at`
+// comes straight from Spotify per track, so no playlist-name guessing is
+// needed — the dates are exact even where the naming never settled.
+function bucketOf(item) {
+  return state.alphaKey === 'filed' ? filedYearOf(item) : initialOf(alphaNameOf(item));
 }
 
 function savePrefs() {
@@ -468,7 +475,8 @@ function albumCard(album) {
   const filings = album.sourceList.length;
 
   const art = album.image
-    ? h('img', { src: album.image, alt: '', loading: 'lazy' })
+    // Spotify's smallest art is 64px; the grid renders at ~180. Ask for 300.
+    ? h('img', { src: artUrl(album.image, 'medium'), alt: '', loading: 'lazy' })
     : h('div', { class: 'noart', text: '♫' });
 
   return h(
@@ -476,7 +484,18 @@ function albumCard(album) {
     { class: `album${allSelected ? ' is-selected' : ''}` },
     h(
       'div',
-      { class: 'album-art' },
+      {
+        // The whole cover is the target: a 22px tick is a poor tap on a phone,
+        // and the toolbar with the play controls scrolls out of reach.
+        class: 'album-art',
+        role: 'button',
+        tabindex: '0',
+        'aria-label': `Actions for ${album.name || 'this album'}`,
+        onclick: () => openSheet(album),
+        onkeydown: (e) => {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openSheet(album); }
+        },
+      },
       tickButton(allSelected, () => {
         if (allSelected) trackIds.forEach((id) => state.selection.delete(id));
         else trackIds.forEach((id) => state.selection.add(id));
@@ -503,8 +522,10 @@ function albumCard(album) {
         album.year ? h('span', { class: 'pill', text: album.year }) : null,
         h('span', {
           class: filings > 1 ? 'pill hot' : 'pill',
-          title: filings > 1 ? 'You filed this in more than one month' : '',
-          text: filings > 1 ? `filed ${filings}×` : monthLabel(album.lastAdded),
+          title: filings > 1
+            ? `Filed in ${filings} different monthly playlists`
+            : 'The month you filed this in',
+          text: filings > 1 ? `in ${filings} months` : monthLabel(album.lastAdded),
         }),
         h('span', { class: 'pill', text: plural(album.tracks.length, 'track', 'tracks') }),
       ),
@@ -590,6 +611,7 @@ function renderAlpha() {
   const keySel = $('alphaKey');
   const trackOpt = keySel.querySelector('option[value="track"]');
   trackOpt.hidden = state.view === 'albums';
+  $('alphaRail').classList.toggle('is-years', state.alphaKey === 'filed');
   if (state.view === 'albums' && state.alphaKey === 'track') state.alphaKey = 'album';
   keySel.value = state.alphaKey;
 
@@ -605,6 +627,7 @@ function renderAlpha() {
   }));
 
   for (const [letter, n] of state.alphaCounts) {
+    // eslint-disable-next-line no-continue
     rail.append(h('button', {
       // An empty letter stays visible but unclickable: the gap is information.
       class: `alpha${state.letter === letter ? ' is-on' : ''}${n ? '' : ' is-empty'}`,
@@ -797,13 +820,15 @@ function render() {
   state.matched = search(state.library.tracks, state.query, state.filters);
 
   const base = state.view === 'albums' ? groupAlbums(state.matched) : state.matched;
-  // Count before the letter filter, so the rail always shows the shape of the
+  // Count before the bucket filter, so the rail always shows the shape of the
   // current search rather than of the bucket you already picked.
-  state.alphaCounts = alphaCounts(base.map(alphaNameOf));
+  state.alphaCounts = state.alphaKey === 'filed'
+    ? yearCounts(base)
+    : alphaCounts(base.map(alphaNameOf));
   if (state.letter && !state.alphaCounts.get(state.letter)) state.letter = null;
 
   state.items = sortResults(
-    byInitial(base, state.letter, alphaNameOf),
+    byBucket(base, state.letter, bucketOf),
     state.sort,
     state.shuffleSeed,
   );
@@ -845,6 +870,54 @@ function readFilters() {
   state.filters.addedFrom = numOrNull($('addedFrom'));
   state.filters.addedTo = numOrNull($('addedTo'));
   state.rendered = PAGE;
+}
+
+// --- album action sheet ----------------------------------------------------
+
+function closeSheet() {
+  $('sheetBackdrop').hidden = true;
+}
+
+function openSheet(album) {
+  const trackIds = album.tracks.map((t) => t.id);
+  const allSelected = trackIds.every((id) => state.selection.has(id));
+  const isOpen = state.expanded.has(album.id);
+
+  $('sheetTitle').textContent = album.name || 'Unknown album';
+  $('sheetArtist').textContent = album.artistLine || '';
+
+  const art = $('sheetArt');
+  art.hidden = !album.image;
+  if (album.image) art.src = artUrl(album.image, 'medium');
+
+  $('sheetPlay').onclick = () => { closeSheet(); playNow(album.tracks); };
+  $('sheetQueue').onclick = () => { closeSheet(); queueTracks(album.tracks); };
+
+  $('sheetSelect').textContent = allSelected ? 'Deselect album' : 'Select album';
+  $('sheetSelect').onclick = () => {
+    if (allSelected) trackIds.forEach((id) => state.selection.delete(id));
+    else trackIds.forEach((id) => state.selection.add(id));
+    closeSheet();
+    render();
+  };
+
+  $('sheetTracks').textContent = isOpen
+    ? 'Hide tracks'
+    : `Show ${plural(album.tracks.length, 'track', 'tracks')}`;
+  $('sheetTracks').onclick = () => {
+    if (isOpen) state.expanded.delete(album.id);
+    else state.expanded.add(album.id);
+    closeSheet();
+    render();
+  };
+
+  const link = $('sheetOpen');
+  const external = !album.id.startsWith('noalbum:');
+  link.hidden = !external;
+  if (external) link.href = `https://open.spotify.com/album/${album.id}`;
+
+  $('sheetBackdrop').hidden = false;
+  $('sheetPlay').focus();
 }
 
 // --- playback --------------------------------------------------------------
@@ -988,7 +1061,7 @@ async function exportPlaylist() {
   const suffix = state.query ? ` — ${state.query}` : '';
   const name = window.prompt(
     `Name for the new playlist (${plural(capped.length, 'track', 'tracks')}):`,
-    `Crate${suffix}`.slice(0, 100),
+    `Personal Spotify${suffix}`.slice(0, 100),
   );
   if (name === null) return;
 
@@ -996,8 +1069,8 @@ async function exportPlaylist() {
   try {
     if (!state.me) state.me = await api.me();
     const playlist = await api.createPlaylist(state.me.id, {
-      name: name.trim() || 'Crate',
-      description: `Built with Crate from ${state.selectedPlaylists.size} playlists`
+      name: name.trim() || 'Personal Spotify',
+      description: `Built with Personal Spotify from ${state.selectedPlaylists.size} playlists`
         + `${state.query ? ` · query: ${state.query}` : ''}`,
       isPublic: false,
     });
@@ -1186,6 +1259,12 @@ function wire() {
   $('btnClearSel').onclick = () => { state.selection.clear(); render(); };
   $('btnExport').onclick = exportPlaylist;
 
+  $('sheetClose').onclick = closeSheet;
+  $('sheetBackdrop').onclick = (e) => {
+    // Only the backdrop itself, never a click that bubbled out of the dialog.
+    if (e.target === $('sheetBackdrop')) closeSheet();
+  };
+
   $('device').onchange = (e) => {
     state.deviceId = e.target.value;
     localStorage.setItem(LS_DEVICE, state.deviceId);
@@ -1245,7 +1324,9 @@ function wire() {
       $('q').focus();
       $('q').select();
     } else if (e.key === 'Escape') {
-      if (!$('pickerBackdrop').hidden) $('pickerBackdrop').hidden = true;
+      // Innermost first: the sheet can sit over the rest.
+      if (!$('sheetBackdrop').hidden) closeSheet();
+      else if (!$('pickerBackdrop').hidden) $('pickerBackdrop').hidden = true;
       else if (document.activeElement === $('q')) $('btnClear').click();
     }
   });

@@ -392,3 +392,47 @@ export function byInitial(items, letter, keyFn) {
   if (!letter) return items;
   return items.filter((item) => initialOf(keyFn(item)) === letter);
 }
+
+// Spotify serves three sizes of album art from the same path, distinguished by
+// a prefix: b273 is 640px, 1e02 is 300px, 4851 is 64px. Rewriting the prefix
+// upgrades already-cached URLs without refetching a thing.
+const ART_SIZES = { large: 'ab67616d0000b273', medium: 'ab67616d00001e02', small: 'ab67616d00004851' };
+
+export function artUrl(url, size = 'medium') {
+  const want = ART_SIZES[size];
+  if (!url || !want) return url;
+  return url.replace(/ab67616d[0-9a-f]{8}/i, want);
+}
+
+// Which filing year an item belongs to — the first time it was filed, since
+// that is when it entered the collection.
+export function filedYearOf(item) {
+  const iso = (item && (item.firstAdded || item.lastAdded)) || '';
+  const y = iso.slice(0, 4);
+  return /^\d{4}$/.test(y) ? y : '—';
+}
+
+// Every year between the earliest and latest filing, newest first, so a year
+// you filed nothing in is visible as a gap rather than silently missing.
+export function yearCounts(items) {
+  const counts = new Map();
+  const years = [];
+  for (const item of items) {
+    const y = filedYearOf(item);
+    counts.set(y, (counts.get(y) || 0) + 1);
+    if (y !== '—') years.push(Number(y));
+  }
+  if (!years.length) return counts;
+
+  const out = new Map();
+  for (let y = Math.max(...years); y >= Math.min(...years); y -= 1) {
+    out.set(String(y), counts.get(String(y)) || 0);
+  }
+  if (counts.has('—')) out.set('—', counts.get('—'));
+  return out;
+}
+
+export function byBucket(items, bucket, bucketFn) {
+  if (!bucket) return items;
+  return items.filter((item) => bucketFn(item) === bucket);
+}
