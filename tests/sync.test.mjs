@@ -581,6 +581,37 @@ test('Cancel interrupts a rate-limit wait immediately', async () => {
   await page.evaluate(() => localStorage.removeItem('crate.cooldownUntil'));
 });
 
+test('a single 429 is remembered, so reloading does not fire more requests', async () => {
+  await page.evaluate(() => document.getElementById('btnCancelSync').click());
+  await page.waitForTimeout(300);
+  await clearBanner(page);
+  await page.evaluate(() => localStorage.removeItem('crate.cooldownUntil'));
+
+  server.rateLimitTimes = 1;
+  server.rateLimitRetryAfter = 0;
+  await page.click('#btnSync');
+
+  // The very first 429 must record a cooldown, not only the last one.
+  await page.waitForFunction(
+    () => Number(localStorage.getItem('crate.cooldownUntil') || 0) > Date.now(),
+    null,
+    { timeout: 15000 },
+  );
+
+  await page.evaluate(() => document.getElementById('btnCancelSync').click());
+  await page.waitForTimeout(300);
+
+  // A reload while held off must not touch the network.
+  const before = server.counters.catalog;
+  await page.reload();
+  await page.waitForTimeout(1500);
+  assert.equal(server.counters.catalog, before, 'boot made no catalog request');
+
+  await page.evaluate(() => localStorage.removeItem('crate.cooldownUntil'));
+  server.rateLimitTimes = 0;
+  server.rateLimitRetryAfter = 2;
+});
+
 test('nothing threw along the way', () => {
   assert.deepEqual(errors, []);
 });

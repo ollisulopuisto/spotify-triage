@@ -104,8 +104,12 @@ export function describeDuration(seconds) {
   return `${Math.round(mins / 60)} hours`;
 }
 
-async function request(path, { method = 'GET', body = null, retriedAuth = false, attempt = 0, rateAttempt = 0 } = {}) {
-  const held = cooldownRemaining();
+async function request(path, {
+  method = 'GET', body = null, retriedAuth = false, attempt = 0, rateAttempt = 0, resuming = false,
+} = {}) {
+  // A chain that has already served its wait is allowed through: the cooldown
+  // exists to stop *new* work starting, not to strand a retry mid-flight.
+  const held = resuming ? 0 : cooldownRemaining();
   if (held) {
     throw new SpotifyError(429, `Spotify is rate-limiting this app for another ${describeDuration(held)}`);
   }
@@ -143,6 +147,11 @@ async function request(path, { method = 'GET', body = null, retriedAuth = false,
       url.replace(BASE, '').split('?')[0],
     );
 
+    // Record the hold-off on the *first* 429, not just the last: a reload
+    // mid-backoff would otherwise start firing requests again immediately,
+    // which is what keeps a penalty alive.
+    startCooldown(Math.max(wait, stated));
+
     if (!step) {
       // Escalation spent. Refuse further calls for a while so a reload or an
       // impatient second click cannot dig the hole deeper.
@@ -155,10 +164,13 @@ async function request(path, { method = 'GET', body = null, retriedAuth = false,
     }
 
     await waitOut(wait);
-    return request(path, { method, body, retriedAuth, attempt, rateAttempt: rateAttempt + 1 });
+    return request(path, {
+      method, body, retriedAuth, attempt, rateAttempt: rateAttempt + 1, resuming: true,
+    });
   }
 
   easeOn();
+  if (res.ok) clearCooldown();
 
   if (res.status >= 500 && attempt < 3) {
     await sleep(2 ** attempt * 1000);

@@ -181,6 +181,13 @@ async function loadCache() {
 }
 
 async function fetchCatalog() {
+  const held = cooldownRemaining();
+  if (held) {
+    throw new SpotifyError(
+      429,
+      `Spotify is rate-limiting this app — waiting ${describeDuration(held)}.`,
+    );
+  }
   showProgress('Reading your playlists');
   try {
     state.catalog = await api.myPlaylists((n, total) => {
