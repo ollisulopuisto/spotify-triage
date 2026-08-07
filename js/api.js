@@ -59,9 +59,12 @@ export class SpotifyError extends Error {
 // returns null cross-origin. Backing off on our own schedule is the only
 // option, and retrying too eagerly is what keeps a penalty alive.
 const BACKOFF_SECONDS = [5, 20, 60];
-// Once the escalation is spent, stop trying at all for a while.
-const COOLDOWN_SECONDS = 300;
+// Once the escalation is spent, stop trying at all for a while. Real penalties
+// run to hours — one observed Retry-After was 9396s — and every probe risks
+// refreshing the clock, so consecutive lockouts back off hard.
+const COOLDOWN_STEPS = [300, 900, 2700, 7200];
 const LS_COOLDOWN = 'crate.cooldownUntil';
+const LS_LOCKOUTS = 'crate.lockouts';
 
 // After a 429 every later request is paced, and the gap decays once things are
 // healthy again. This is what stops a 180-playlist sync from re-triggering the
@@ -95,6 +98,14 @@ function startCooldown(seconds) {
 
 export function clearCooldown() {
   localStorage.removeItem(LS_COOLDOWN);
+  localStorage.removeItem(LS_LOCKOUTS);
+}
+
+// Each lockout that happens without a success in between waits longer.
+function nextCooldownSeconds() {
+  const n = Number(localStorage.getItem(LS_LOCKOUTS) || 0);
+  localStorage.setItem(LS_LOCKOUTS, String(n + 1));
+  return COOLDOWN_STEPS[Math.min(n, COOLDOWN_STEPS.length - 1)];
 }
 
 export function describeDuration(seconds) {
@@ -143,7 +154,7 @@ async function request(path, {
 
     console.warn(
       `[crate] 429 #${rateAttempt + 1}, Retry-After=${stated || 'unreadable'},`
-      + ` pacing ${gapMs}ms, waiting ${wait || COOLDOWN_SECONDS}s`,
+      + ` pacing ${gapMs}ms, waiting ${wait}s`,
       url.replace(BASE, '').split('?')[0],
     );
 
@@ -155,11 +166,13 @@ async function request(path, {
     if (!step) {
       // Escalation spent. Refuse further calls for a while so a reload or an
       // impatient second click cannot dig the hole deeper.
-      startCooldown(COOLDOWN_SECONDS);
+      const hold = Math.max(nextCooldownSeconds(), stated);
+      startCooldown(hold);
       throw new SpotifyError(
         429,
-        'Spotify is rate-limiting this app. Nothing is broken — it clears on its own.'
-        + ` Try again in ${describeDuration(COOLDOWN_SECONDS)}.`,
+        'Spotify is rate-limiting this app. Nothing is broken — it clears on its own,'
+        + ' but it can take hours, and retrying makes it last longer.'
+        + ` Try again in ${describeDuration(hold)}.`,
       );
     }
 
