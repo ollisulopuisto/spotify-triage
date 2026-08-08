@@ -1,7 +1,7 @@
 import { db } from './db.js';
 import {
   api, SpotifyError, setWaitReporter, cooldownRemaining, describeDuration,
-  cancelInFlight, resetCancel, setPacing, BULK_PACING_MS, clearCooldown,
+  cancelInFlight, resetCancel, setPacing, BULK_PACING_MS, clearCooldown, setCooldown,
 } from './api.js';
 import * as auth from './auth.js';
 import * as cloud from './cloud.js';
@@ -122,21 +122,27 @@ function loadPrefs() {
 
 let bannerTimer = null;
 
-// `action` puts a button in the banner: some refusals are ours, and the user
+// `actions` put buttons in the banner: some refusals are ours, and the user
 // needs a way out that does not involve a console on a phone.
-function banner(message, kind = 'error', action = null) {
+function banner(message, kind = 'error', actions = null) {
   const el = $('banner');
   clearTimeout(bannerTimer);
   if (!message) { el.hidden = true; return; }
   el.textContent = '';
   el.append(h('span', { text: message }));
-  if (action) {
-    el.append(h('button', {
-      id: 'bannerAction',
-      class: 'btn btn-small',
-      text: action.label,
-      onclick: action.onClick,
-    }));
+
+  const list = Array.isArray(actions) ? actions : [actions].filter(Boolean);
+  if (list.length) {
+    el.append(h(
+      'span',
+      { class: 'banner-actions' },
+      list.map((a, i) => h('button', {
+        id: a.id || (i === 0 ? 'bannerAction' : `bannerAction${i + 1}`),
+        class: 'btn btn-small',
+        text: a.label,
+        onclick: a.onClick,
+      })),
+    ));
   }
   el.className = kind === 'ok' || kind === 'warn' ? `banner ${kind}` : 'banner';
   el.hidden = false;
@@ -228,10 +234,14 @@ async function sync({ full = false } = {}) {
       `Spotify is still rate-limiting this app — waiting ${describeDuration(held)}.`
       + ' Syncing now would probably extend it.',
       'warn',
-      {
-        label: 'Try anyway',
-        onClick: () => { clearCooldown(); banner(''); sync({ full }); },
-      },
+      [
+        { id: 'btnAskLimit', label: 'Ask Spotify', onClick: checkRateLimit },
+        {
+          id: 'bannerAction',
+          label: 'Try anyway',
+          onClick: () => { clearCooldown(); banner(''); sync({ full }); },
+        },
+      ],
     );
     return;
   }
@@ -782,6 +792,12 @@ function renderResults() {
           onclick: () => { pullFromCloud(); },
           text: 'Restore from another device',
         }),
+        h('button', {
+          id: 'btnCheckLimit',
+          class: 'btn btn-quiet btn-small',
+          onclick: checkRateLimit,
+          text: 'Check rate limit',
+        }),
       ),
     ));
     return;
@@ -920,6 +936,41 @@ function readFilters() {
   state.filters.addedFrom = numOrNull($('addedFrom'));
   state.filters.addedTo = numOrNull($('addedTo'));
   state.rendered = PAGE;
+}
+
+// --- rate-limit check ------------------------------------------------------
+
+// The browser cannot read Retry-After, so the server reads it for us and we
+// believe that number instead of guessing at a cooldown.
+async function checkRateLimit() {
+  banner('Asking Spotify…', 'warn');
+  try {
+    const r = await cloud.probeSpotify();
+    if (r.ok) {
+      clearCooldown();
+      banner('Spotify is answering again.', 'ok', {
+        label: 'Sync now',
+        onClick: () => { banner(''); sync(); },
+      });
+      return;
+    }
+
+    if (r.status === 429 && r.retryAfterSeconds) {
+      setCooldown(r.retryAfterSeconds);
+      const at = new Date(r.retryAt);
+      banner(
+        `Spotify is rate-limiting this app for another ${describeDuration(r.retryAfterSeconds)}`
+        + ` — until about ${at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.`
+        + ' Nothing to do but wait; asking again does not help.',
+        'warn',
+      );
+      return;
+    }
+
+    banner(`Spotify answered ${r.status}. Not a rate limit.`, 'warn');
+  } catch (err) {
+    banner(describeError(err));
+  }
 }
 
 // --- cross-device copy -----------------------------------------------------

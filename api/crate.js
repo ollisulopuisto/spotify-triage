@@ -63,7 +63,29 @@ async function askSpotify(auth) {
 // One file per account. The id is already unique; keep the path debuggable.
 const pathFor = (userId) => `crates/${encodeURIComponent(userId)}.json`;
 
+// Ask Spotify how long a lockout has left. Browsers cannot read Retry-After
+// (Spotify sends no Access-Control-Expose-Headers), but a server can — so the
+// one number that matters during a rate limit stops being invisible.
+async function probe(auth) {
+  const r = await fetch(SPOTIFY_ME, { headers: { Authorization: auth } });
+  if (r.status !== 429) return { ok: r.ok, status: r.status };
+
+  const seconds = Number(r.headers.get('Retry-After') || 0);
+  return {
+    ok: false,
+    status: 429,
+    retryAfterSeconds: seconds || null,
+    retryAt: seconds ? new Date(Date.now() + seconds * 1000).toISOString() : null,
+  };
+}
+
 export default async function handler(req, res) {
+  if ('probe' in (req.query || {})) {
+    const auth = req.headers.authorization || '';
+    if (!/^Bearer \S+$/.test(auth)) return json(res, 401, { error: 'No token to test with.' });
+    return json(res, 200, await probe(auth));
+  }
+
   let userId = readPass(req.headers['x-crate-pass']);
   let freshPass = null;
 

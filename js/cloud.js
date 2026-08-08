@@ -31,6 +31,17 @@ async function authed(method, body, query = '') {
   return res;
 }
 
+// What Spotify says about our rate-limit status, read server-side because the
+// browser is not allowed to see Retry-After.
+export async function probeSpotify() {
+  const token = await getAccessToken();
+  const res = await fetch(`${ENDPOINT}?probe=1`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`Could not reach the checker (${res.status}).`);
+  return res.json();
+}
+
 // The whole crate, in the shape loadCache() expects to find in IndexedDB.
 export function snapshotOf(playlists, selectedIds, lastSync) {
   return JSON.stringify({

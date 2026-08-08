@@ -45,6 +45,7 @@ const server = {
   forbiddenWithFields: new Set(),
   rateLimitOnce: false,
   spotifyIdentityDown: false,  // Spotify 429s even /me
+  probeAnswer: { ok: true, status: 200 },
   rateLimitTimes: 0,      // 429 this many more catalog reads
   rateLimitRetryAfter: 2, // what the header says
   devices: [
@@ -128,6 +129,13 @@ async function installCloudMock(page) {
         contentType: 'application/json',
         headers: mint,
         body: JSON.stringify({ ok: true, bytes: cloudStore.length }),
+      });
+    }
+    if (new URL(route.request().url()).searchParams.has('probe')) {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(server.probeAnswer),
       });
     }
     if (new URL(route.request().url()).searchParams.has('meta')) {
@@ -943,6 +951,46 @@ test('an older device does not overwrite a newer crate saved elsewhere', async (
 
   await fresh.close();
   cloudUploadedAt = null;
+});
+
+test('the app can tell you how long a lockout has left', async () => {
+  await page.evaluate(() => document.getElementById('btnCancelSync').click());
+  await page.waitForTimeout(300);
+  await clearBanner(page);
+
+  // A local hold-off is in place and the user wants to know the real answer.
+  await page.evaluate(() => {
+    localStorage.setItem('crate.cooldownUntil', String(Date.now() + 60 * 1000));
+  });
+  server.probeAnswer = {
+    ok: false,
+    status: 429,
+    retryAfterSeconds: 9396,
+    retryAt: new Date(Date.now() + 9396 * 1000).toISOString(),
+  };
+
+  await page.click('#btnSync');
+  await page.waitForSelector('#btnAskLimit');
+  await page.click('#btnAskLimit');
+
+  await page.waitForFunction(
+    () => /another 2 hours|another \d+ (minutes|hours)/i.test(
+      document.getElementById('banner').textContent,
+    ),
+    null,
+    { timeout: 15000 },
+  );
+  const text = await page.textContent('#banner');
+  assert.match(text, /until about \d{1,2}[:.]\d{2}/, 'it names a clock time');
+
+  // And Spotify's real number replaces our guess.
+  const held = await page.evaluate(
+    () => Number(localStorage.getItem('crate.cooldownUntil')) - Date.now(),
+  );
+  assert.ok(held > 9000 * 1000, `cooldown should follow Retry-After, got ${held}ms`);
+
+  server.probeAnswer = { ok: true, status: 200 };
+  await page.evaluate(() => localStorage.removeItem('crate.cooldownUntil'));
 });
 
 test('nothing threw along the way', () => {

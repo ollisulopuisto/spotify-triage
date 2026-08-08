@@ -106,6 +106,11 @@ function startCooldown(seconds) {
   localStorage.setItem(LS_COOLDOWN, String(Date.now() + seconds * 1000));
 }
 
+// Spotify's own number, once something manages to read it.
+export function setCooldown(seconds) {
+  if (seconds > 0) startCooldown(seconds);
+}
+
 export function clearCooldown() {
   localStorage.removeItem(LS_COOLDOWN);
   localStorage.removeItem(LS_LOCKOUTS);
