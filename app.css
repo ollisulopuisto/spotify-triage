@@ -385,3 +385,6 @@ a.album-title:hover { color: var(--accent); text-decoration: underline; }
 }
 /* Year buckets need more room than single letters. */
 .alpha-rail.is-years .alpha { min-width: 46px; font-variant-numeric: tabular-nums; }
+/* An escape hatch sits in the banner when the app itself is the one refusing. */
+.banner { display: flex; align-items: center; gap: 12px; justify-content: space-between; }
+.banner button { flex: none; }

@@ -44,6 +44,7 @@ const server = {
   // Playlist IDs that 403 only when the request carries a `fields` filter.
   forbiddenWithFields: new Set(),
   rateLimitOnce: false,
+  spotifyIdentityDown: false,  // Spotify 429s even /me
   rateLimitTimes: 0,      // 429 this many more catalog reads
   rateLimitRetryAfter: 2, // what the header says
   devices: [
@@ -93,26 +94,45 @@ function json(route, body) {
 
 let cloudStore = null;
 
+// Mirrors the real endpoint: a Spotify token buys a pass, and the pass alone
+// is enough afterwards — including while Spotify is rate-limiting.
 async function installCloudMock(page) {
   await page.route('**/api/crate', async (route) => {
     const method = route.request().method();
-    // The real endpoint refuses anything without a Spotify bearer token.
-    if (!/^Bearer \S+/.test(route.request().headers().authorization || '')) {
+    const headers = route.request().headers();
+    const hasPass = headers['x-crate-pass'] === 'test-pass';
+    const hasToken = /^Bearer \S+/.test(headers.authorization || '');
+
+    if (!hasPass && !hasToken) {
       return route.fulfill({ status: 401, contentType: 'application/json', body: '{}' });
     }
+    if (!hasPass && server.spotifyIdentityDown) {
+      return route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'identity unavailable' }),
+      });
+    }
+    const mint = hasPass ? {} : {
+      'X-Crate-Pass': 'test-pass',
+      'Access-Control-Expose-Headers': 'X-Crate-Pass',
+    };
     if (method === 'PUT') {
       cloudStore = route.request().postData();
       server.counters.cloudPuts.push(cloudStore.length);
       return route.fulfill({
         status: 200,
         contentType: 'application/json',
+        headers: mint,
         body: JSON.stringify({ ok: true, bytes: cloudStore.length }),
       });
     }
     if (!cloudStore) {
-      return route.fulfill({ status: 404, contentType: 'application/json', body: '{}' });
+      return route.fulfill({ status: 404, contentType: 'application/json', headers: mint, body: '{}' });
     }
-    return route.fulfill({ status: 200, contentType: 'application/json', body: cloudStore });
+    return route.fulfill({
+      status: 200, contentType: 'application/json', headers: mint, body: cloudStore,
+    });
   });
 }
 
@@ -760,6 +780,88 @@ test('a fresh device restores from the store without touching Spotify', async ()
   assert.equal(server.counters.trackPages, 0, 'no playlist was read from Spotify');
   assert.equal(await fresh.isHidden('#pickerBackdrop'), true, 'and the picker did not open');
 
+  await fresh.close();
+});
+
+test('a local hold-off can be overridden from the banner', async () => {
+  await page.evaluate(() => document.getElementById('btnCancelSync').click());
+  await page.waitForTimeout(300);
+  await clearBanner(page);
+
+  // Pretend an earlier 429 put us in a long local cooldown.
+  await page.evaluate(() => {
+    localStorage.setItem('crate.cooldownUntil', String(Date.now() + 2 * 3600 * 1000));
+  });
+  server.rateLimitTimes = 0;
+  server.playlists.forEach((p, i) => { p.snapshot = `override-${i}`; });
+  resetCounters();
+
+  await page.click('#btnSync');
+  await page.waitForSelector('#bannerAction');
+  assert.match(await page.textContent('#banner'), /rate-limiting/i);
+  assert.equal(server.counters.catalog, 0, 'blocked before any request');
+
+  await page.click('#bannerAction');
+  await waitForSync(page);
+  assert.ok(server.counters.catalog >= 1, 'the override actually synced');
+  assert.equal(
+    await page.evaluate(() => localStorage.getItem('crate.cooldownUntil')),
+    null,
+    'and cleared the stale hold-off',
+  );
+});
+
+test('a stored pass restores the crate even while Spotify is rate-limiting', async () => {
+  // The deadlock this guards against: identity was checked against Spotify on
+  // every call, so a rate limit blocked the one route that avoids the API.
+  const fresh = await browser.newPage();
+  await installMock(fresh);
+  await installCloudMock(fresh);
+  await fresh.goto(BASE_URL);
+  await fresh.evaluate(() => {
+    localStorage.setItem('crate.clientId', 'c'.repeat(32));
+    localStorage.setItem('crate.tokens', JSON.stringify({
+      accessToken: 'tok', refreshToken: 'ref', expiresAt: Date.now() + 3600e3,
+    }));
+    // Already verified once on this device.
+    localStorage.setItem('crate.cloudPass', 'test-pass');
+  });
+
+  server.spotifyIdentityDown = true;
+  resetCounters();
+  await fresh.reload();
+
+  await fresh.waitForFunction(
+    () => /Restored/.test(document.getElementById('banner').textContent),
+    null,
+    { timeout: 20000 },
+  );
+  await fresh.waitForSelector('.album');
+  assert.equal(server.counters.trackPages, 0, 'Spotify was not read at all');
+
+  server.spotifyIdentityDown = false;
+  await fresh.close();
+});
+
+test('without a pass, a rate-limited identity check says so honestly', async () => {
+  const fresh = await browser.newPage();
+  await installMock(fresh);
+  await installCloudMock(fresh);
+  await fresh.goto(BASE_URL);
+  await fresh.evaluate(() => {
+    localStorage.setItem('crate.clientId', 'd'.repeat(32));
+    localStorage.setItem('crate.tokens', JSON.stringify({
+      accessToken: 'tok', refreshToken: 'ref', expiresAt: Date.now() + 3600e3,
+    }));
+    localStorage.removeItem('crate.cloudPass');
+  });
+
+  server.spotifyIdentityDown = true;
+  await fresh.reload();
+  // It must not claim the crate is empty-and-fine; the picker opens instead.
+  await fresh.waitForSelector('#pickerBackdrop:not([hidden])', { timeout: 20000 });
+
+  server.spotifyIdentityDown = false;
   await fresh.close();
 });
 

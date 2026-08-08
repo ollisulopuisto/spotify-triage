@@ -1,44 +1,94 @@
 // Cross-device storage for a synced crate.
 //
-// Identity comes from Spotify, not from us: the caller presents the same access
-// token the browser already holds, we ask Spotify who it belongs to, and that
-// answer picks the file. There are no accounts, passwords or sessions here, and
-// a token for one account can never reach another account's data.
+// Identity comes from Spotify, but only once. Verifying every request against
+// Spotify /me created a deadlock: when the account is rate-limited, /me answers
+// 429 too, so the one path that exists to avoid Spotify's rate limit was itself
+// blocked by it. So the first successful verification mints a pass of our own,
+// signed with a server secret, and later requests present that instead.
 //
-// The payload is stored as-is. It is a private blob reachable only through this
-// function, but it is not encrypted at rest — see the note on the setup page.
+// The payload is stored as-is: a private blob reachable only through this
+// function, not encrypted at rest — as the setup page says.
 
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import { put, head } from '@vercel/blob';
 
 const SPOTIFY_ME = 'https://api.spotify.com/v1/me';
 // A crate of ~35k tracks is around 7MB of JSON. Leave room, refuse the absurd.
 const MAX_BYTES = 32 * 1024 * 1024;
+const PASS_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 
 function json(res, status, body) {
   res.status(status).setHeader('Content-Type', 'application/json');
   res.send(JSON.stringify(body));
 }
 
-// Resolve the bearer token to a Spotify user id, or null.
-async function whoIs(req) {
-  const auth = req.headers.authorization || '';
-  if (!/^Bearer \S+$/.test(auth)) return null;
+const b64 = (s) => Buffer.from(s, 'utf8').toString('base64url');
 
-  const r = await fetch(SPOTIFY_ME, { headers: { Authorization: auth } });
-  if (!r.ok) return null;
-  const me = await r.json().catch(() => null);
-  return me && me.id ? String(me.id) : null;
+function sign(payload) {
+  const secret = process.env.CRATE_SIGNING_SECRET;
+  if (!secret) throw new Error('CRATE_SIGNING_SECRET is not configured');
+  return createHmac('sha256', secret).update(payload).digest('base64url');
 }
 
-// One file per account. The id is already unique and opaque enough; keep the
-// path boring so it stays debuggable.
+function mintPass(userId) {
+  const body = `${b64(userId)}.${Date.now() + PASS_TTL_MS}`;
+  return `${body}.${sign(body)}`;
+}
+
+// Returns the user id a pass belongs to, or null if it is forged or expired.
+function readPass(pass) {
+  const parts = String(pass || '').split('.');
+  if (parts.length !== 3) return null;
+
+  const [rawId, expires, mac] = parts;
+  const expected = sign(`${rawId}.${expires}`);
+  const a = Buffer.from(mac);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
+  if (!Number(expires) || Number(expires) < Date.now()) return null;
+
+  return Buffer.from(rawId, 'base64url').toString('utf8');
+}
+
+// Ask Spotify who holds this token. `rateLimited` is reported separately from
+// "invalid", because telling someone to sign in again during a 429 is a lie.
+async function askSpotify(auth) {
+  const r = await fetch(SPOTIFY_ME, { headers: { Authorization: auth } });
+  if (r.status === 429) return { rateLimited: true };
+  if (!r.ok) return {};
+  const me = await r.json().catch(() => null);
+  return me && me.id ? { userId: String(me.id) } : {};
+}
+
+// One file per account. The id is already unique; keep the path debuggable.
 const pathFor = (userId) => `crates/${encodeURIComponent(userId)}.json`;
 
 export default async function handler(req, res) {
-  const userId = await whoIs(req);
+  let userId = readPass(req.headers['x-crate-pass']);
+  let freshPass = null;
+
   if (!userId) {
-    return json(res, 401, { error: 'Sign in to Spotify first — that token is not valid.' });
+    const auth = req.headers.authorization || '';
+    if (!/^Bearer \S+$/.test(auth)) {
+      return json(res, 401, { error: 'Sign in to Spotify first.' });
+    }
+
+    const asked = await askSpotify(auth);
+    if (asked.rateLimited) {
+      return json(res, 503, {
+        error: 'Spotify is rate-limiting this app, so your identity cannot be confirmed'
+          + ' right now. Try again once it clears.',
+      });
+    }
+    if (!asked.userId) return json(res, 401, { error: 'That Spotify token is not valid.' });
+
+    userId = asked.userId;
+    // Hand back a pass so the next call does not need Spotify at all.
+    freshPass = mintPass(userId);
   }
+
+  if (freshPass) res.setHeader('X-Crate-Pass', freshPass);
+  res.setHeader('Access-Control-Expose-Headers', 'X-Crate-Pass');
 
   const pathname = pathFor(userId);
 
@@ -53,7 +103,7 @@ export default async function handler(req, res) {
       res.setHeader('Cache-Control', 'no-store');
       return res.send(body);
     } catch {
-      // head() throws when the blob does not exist yet: a first-time device.
+      // head() throws when the blob does not exist: a first-time account.
       return json(res, 404, { error: 'No crate stored yet.' });
     }
   }

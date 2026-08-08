@@ -7,17 +7,28 @@
 import { getAccessToken } from './auth.js';
 
 const ENDPOINT = '/api/crate';
+const LS_PASS = 'crate.cloudPass';
 
+// The server mints a pass after verifying us with Spotify once. Keeping it
+// means later calls need no Spotify round trip — which matters precisely when
+// Spotify is rate-limiting, since that is when the copy is most useful.
 async function authed(method, body) {
-  const token = await getAccessToken();
-  return fetch(ENDPOINT, {
-    method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      ...(body ? { 'Content-Type': 'application/json' } : {}),
-    },
-    body,
-  });
+  const pass = localStorage.getItem(LS_PASS);
+  const headers = { ...(body ? { 'Content-Type': 'application/json' } : {}) };
+  if (pass) headers['X-Crate-Pass'] = pass;
+
+  // Only reach for a token when there is no pass: refreshing one can itself
+  // fail while rate-limited.
+  if (!pass) headers.Authorization = `Bearer ${await getAccessToken()}`;
+
+  const res = await fetch(ENDPOINT, { method, headers, body });
+
+  const minted = res.headers.get('X-Crate-Pass');
+  if (minted) localStorage.setItem(LS_PASS, minted);
+  // A rejected pass is stale: drop it so the next attempt re-verifies.
+  if (res.status === 401 && pass) localStorage.removeItem(LS_PASS);
+
+  return res;
 }
 
 // The whole crate, in the shape loadCache() expects to find in IndexedDB.
@@ -32,7 +43,9 @@ export function snapshotOf(playlists, selectedIds, lastSync) {
 }
 
 export async function push(payload) {
-  const res = await authed('PUT', payload);
+  let res = await authed('PUT', payload);
+  // One retry after a stale pass was discarded, this time with a token.
+  if (res.status === 401) res = await authed('PUT', payload);
   if (!res.ok) {
     const detail = await res.json().catch(() => null);
     throw new Error((detail && detail.error) || `Upload failed (${res.status}).`);
@@ -42,7 +55,8 @@ export async function push(payload) {
 
 // Returns null when this account has never pushed, which is not an error.
 export async function pull() {
-  const res = await authed('GET');
+  let res = await authed('GET');
+  if (res.status === 401) res = await authed('GET');
   if (res.status === 404) return null;
   if (!res.ok) {
     const detail = await res.json().catch(() => null);

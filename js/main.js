@@ -1,7 +1,7 @@
 import { db } from './db.js';
 import {
   api, SpotifyError, setWaitReporter, cooldownRemaining, describeDuration,
-  cancelInFlight, resetCancel, setPacing, BULK_PACING_MS,
+  cancelInFlight, resetCancel, setPacing, BULK_PACING_MS, clearCooldown,
 } from './api.js';
 import * as auth from './auth.js';
 import * as cloud from './cloud.js';
@@ -122,11 +122,22 @@ function loadPrefs() {
 
 let bannerTimer = null;
 
-function banner(message, kind = 'error') {
+// `action` puts a button in the banner: some refusals are ours, and the user
+// needs a way out that does not involve a console on a phone.
+function banner(message, kind = 'error', action = null) {
   const el = $('banner');
   clearTimeout(bannerTimer);
   if (!message) { el.hidden = true; return; }
-  el.textContent = message;
+  el.textContent = '';
+  el.append(h('span', { text: message }));
+  if (action) {
+    el.append(h('button', {
+      id: 'bannerAction',
+      class: 'btn btn-small',
+      text: action.label,
+      onclick: action.onClick,
+    }));
+  }
   el.className = kind === 'ok' || kind === 'warn' ? `banner ${kind}` : 'banner';
   el.hidden = false;
   if (kind === 'ok') bannerTimer = setTimeout(() => { el.hidden = true; }, 4000);
@@ -215,8 +226,12 @@ async function sync({ full = false } = {}) {
   if (held) {
     banner(
       `Spotify is still rate-limiting this app — waiting ${describeDuration(held)}.`
-      + ' Syncing now would only extend it.',
+      + ' Syncing now would probably extend it.',
       'warn',
+      {
+        label: 'Try anyway',
+        onClick: () => { clearCooldown(); banner(''); sync({ full }); },
+      },
     );
     return;
   }
@@ -1410,7 +1425,10 @@ function wire() {
   });
 }
 
+const BUILD = 'v26.08.08.1';
+
 async function start() {
+  console.info(`[crate] build ${BUILD}`);
   loadPrefs();
   wire();
 
@@ -1440,7 +1458,6 @@ async function start() {
   }
 
   showSetup(false);
-  loadDevices();
   $('brandSub').textContent = state.lastSync
     ? `${plural(state.library.tracks.length, 'track', 'tracks')} across `
       + `${plural(state.selectedPlaylists.size, 'playlist', 'playlists')}`
@@ -1449,15 +1466,18 @@ async function start() {
   render();
 
   if (!state.cached.length) {
-    // A device with nothing cached would otherwise re-read every playlist from
-    // Spotify — minutes of paced requests. If this account has a saved copy,
-    // one request replaces all of it.
+    // Before anything touches Spotify: a device with nothing cached would
+    // otherwise re-read every playlist, minutes of paced requests that can end
+    // in a lockout. If this account has a saved copy, one request replaces it.
     const restored = await pullFromCloud({ quiet: true });
     if (!restored) {
       banner('Signed in. Now choose which playlists make up your crate.', 'ok');
       await openPicker();
     }
   }
+
+  // Devices are a Spotify call, so it waits until the crate is in hand.
+  loadDevices();
 }
 
 start();
