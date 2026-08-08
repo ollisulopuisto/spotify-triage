@@ -964,11 +964,22 @@ test('an older device does not overwrite a newer crate saved elsewhere', async (
   await fresh.reload();
   await fresh.waitForSelector('.album');
   await fresh.waitForFunction(
-    () => /newer crate saved/i.test(document.getElementById('banner').textContent),
+    () => /Another device saved a crate/i.test(document.getElementById('banner').textContent),
     null,
     { timeout: 15000 },
   );
   assert.equal(server.counters.cloudPuts.length, 0, 'the newer copy survived');
+
+  // Newer is not always better: a half-finished sync from a phone should be
+  // beatable by a complete one here, so both directions are offered.
+  assert.match(await fresh.textContent('#banner'), /This one holds [\d\s,.]+tracks/);
+  await fresh.click('#btnKeepMine');
+  await fresh.waitForFunction(
+    () => /Saved\./.test(document.getElementById('banner').textContent),
+    null,
+    { timeout: 15000 },
+  );
+  assert.equal(server.counters.cloudPuts.length, 1, 'this device overwrote it on request');
 
   await fresh.close();
   cloudUploadedAt = null;

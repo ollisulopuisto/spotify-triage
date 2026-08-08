@@ -1122,15 +1122,37 @@ async function backUpIfStale() {
   if (!state.cached.length || !state.lastSync) return;
   if (localStorage.getItem(LS_PUSHED) === state.lastSync) return;
   try {
-    // Never overwrite a copy written after our own data was synced: that copy
-    // came from another device and knows things this one does not.
-    const stored = await cloud.storedAt();
+    // Never silently overwrite a copy written after our own data was synced:
+    // that copy came from another device and may know things this one does not.
+    const meta = await cloud.storedMeta();
+    const stored = meta && meta.uploadedAt;
     if (stored && new Date(stored) > new Date(state.lastSync)) {
       console.warn('[crate] stored copy is newer than this device; not overwriting it');
+      // Newer is not the same as better — a half-finished sync from a phone is
+      // newer than a complete one from here — so describe both and let the
+      // person decide which survives.
+      const size = meta.bytes ? `${Math.round(meta.bytes / 1024 / 1024 * 10) / 10} MB` : 'unknown size';
       banner(
-        'Another device has a newer crate saved. Sync here to catch up, or restore it.',
+        `Another device saved a crate ${dateLabel(stored)} (${size}).`
+        + ` This one holds ${plural(state.library.tracks.length, 'track', 'tracks')}`
+        + ` from ${plural(state.selectedPlaylists.size, 'playlist', 'playlists')}.`,
         'warn',
-        { label: 'Restore it', onClick: () => { banner(''); pullFromCloud(); } },
+        [
+          {
+            id: 'btnKeepMine',
+            label: 'Upload this one',
+            onClick: async () => {
+              banner('Uploading…', 'warn');
+              try {
+                await pushToCloud();
+                banner('Saved. Other devices will pick this up.', 'ok');
+              } catch (err) {
+                banner(describeError(err));
+              }
+            },
+          },
+          { id: 'bannerAction', label: 'Restore it', onClick: () => { banner(''); pullFromCloud(); } },
+        ],
       );
       return;
     }

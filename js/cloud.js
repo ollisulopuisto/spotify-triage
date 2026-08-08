@@ -66,11 +66,15 @@ export async function push(payload) {
 
 // When the stored copy was last written, or null if there is none. Cheap: no
 // payload comes back.
-export async function storedAt() {
+export async function storedMeta() {
   const res = await authed('GET', null, '?meta=1');
   if (!res.ok) return null;
-  const data = await res.json().catch(() => null);
-  return (data && data.uploadedAt) || null;
+  return res.json().catch(() => null);
+}
+
+export async function storedAt() {
+  const meta = await storedMeta();
+  return (meta && meta.uploadedAt) || null;
 }
 
 // Returns null when this account has never pushed, which is not an error.
