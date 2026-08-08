@@ -74,6 +74,9 @@ const state = {
   selectedPlaylists: new Set(),
   library: { tracks: [] },
   view: 'albums',
+  // Covers are lovely on a desktop and wasteful on a phone, where three albums
+  // fill the screen. Narrow screens start as a list; either can switch.
+  layout: window.matchMedia('(max-width: 700px)').matches ? 'list' : 'grid',
   sort: 'relevance',
   query: '',
   filters: { playlistIds: null, yearFrom: null, yearTo: null, addedFrom: null, addedTo: null },
@@ -108,7 +111,9 @@ function bucketOf(item) {
 }
 
 function savePrefs() {
-  localStorage.setItem(LS_PREFS, JSON.stringify({ view: state.view, sort: state.sort }));
+  localStorage.setItem(LS_PREFS, JSON.stringify({
+    view: state.view, sort: state.sort, layout: state.layout,
+  }));
 }
 
 function loadPrefs() {
@@ -116,6 +121,7 @@ function loadPrefs() {
     const p = JSON.parse(localStorage.getItem(LS_PREFS));
     if (p && p.view) state.view = p.view;
     if (p && p.sort) state.sort = p.sort;
+    if (p && p.layout) state.layout = p.layout;
   } catch { /* first run */ }
 }
 
@@ -663,6 +669,62 @@ function albumCard(album) {
   );
 }
 
+// The same album, minus the cover art: on a phone this fits ten where the grid
+// fits three, which is the difference between browsing and scrolling.
+function albumRow(album) {
+  const trackIds = album.tracks.map((t) => t.id);
+  const allSelected = trackIds.every((id) => state.selection.has(id));
+  const isOpen = state.expanded.has(album.id);
+  const filings = album.sourceList.length;
+
+  return h(
+    'div',
+    { class: `arow${allSelected ? ' is-selected' : ''}` },
+    tickButton(allSelected, () => {
+      if (allSelected) trackIds.forEach((id) => state.selection.delete(id));
+      else trackIds.forEach((id) => state.selection.add(id));
+      render();
+    }, allSelected ? 'Deselect album' : 'Select album'),
+    album.image
+      ? h('img', { src: artUrl(album.image, 'medium'), alt: '', loading: 'lazy' })
+      : h('div', { class: 'noart small', text: '♫' }),
+    h(
+      'button',
+      {
+        class: 'arow-id',
+        'aria-label': `Actions for ${album.name || 'this album'}`,
+        onclick: () => openSheet(album),
+      },
+      h('span', { class: 'arow-title', text: album.name || 'Unknown album' }),
+      h('span', { class: 'arow-artist', text: album.artistLine }),
+    ),
+    h(
+      'div',
+      { class: 'arow-meta hide-sm' },
+      album.year ? h('span', { class: 'pill', text: album.year }) : null,
+      filings > 1
+        ? h('span', { class: 'pill hot', text: `in ${filings} months` })
+        : h('span', { class: 'pill', text: monthLabel(album.lastAdded) }),
+    ),
+    h('div', { class: 'playcell' }, ...playButtons(album.tracks, album.name || 'this album')),
+    h('button', {
+      class: 'linkbtn arow-more',
+      text: isOpen ? 'Hide' : `${album.tracks.length}`,
+      title: isOpen ? 'Hide tracks' : `Show ${album.tracks.length} tracks`,
+      onclick: () => {
+        if (isOpen) state.expanded.delete(album.id);
+        else state.expanded.add(album.id);
+        render();
+      },
+    }),
+    isOpen ? h(
+      'ul',
+      { class: 'tracklist arow-tracks' },
+      album.tracks.map((t) => h('li', {}, h('span', { text: t.name }))),
+    ) : null,
+  );
+}
+
 function trackRow(t) {
   const selected = state.selection.has(t.id);
   const last = t.sources[t.sources.length - 1];
@@ -700,6 +762,14 @@ function trackRow(t) {
     ),
     h('div', { class: 'num', text: duration(t.durationMs) }),
   );
+}
+
+function renderLayoutToggle() {
+  // Only albums have two shapes; the track list is already a list.
+  $('layoutToggle').hidden = state.view !== 'albums';
+  for (const btn of $('layoutToggle').querySelectorAll('button')) {
+    btn.classList.toggle('is-active', btn.dataset.layout === state.layout);
+  }
 }
 
 function renderAlpha() {
@@ -871,7 +941,9 @@ function renderResults() {
   const slice = state.items.slice(0, state.rendered);
 
   if (state.view === 'albums') {
-    box.append(h('div', { class: 'grid' }, slice.map(albumCard)));
+    box.append(state.layout === 'list'
+      ? h('div', { class: 'rows' }, slice.map(albumRow))
+      : h('div', { class: 'grid' }, slice.map(albumCard)));
   } else {
     box.append(h('div', { class: 'rows' }, slice.map(trackRow)));
   }
@@ -954,6 +1026,7 @@ function render() {
     state.shuffleSeed,
   );
 
+  renderLayoutToggle();
   renderAlpha();
   renderActiveFilters();
   renderResults();
@@ -1431,10 +1504,11 @@ function wire() {
     $('q').focus();
   };
 
-  // view toggle
-  for (const seg of document.querySelectorAll('.seg')) {
+  // view toggle — scoped to segments that actually name a view, since .seg is
+  // now shared with the layout and picker-scope toggles.
+  for (const seg of document.querySelectorAll('.seg[data-view]')) {
     seg.onclick = () => {
-      document.querySelectorAll('.seg').forEach((s) => s.classList.remove('is-active'));
+      document.querySelectorAll('.seg[data-view]').forEach((s) => s.classList.remove('is-active'));
       seg.classList.add('is-active');
       state.view = seg.dataset.view;
       state.rendered = PAGE;
@@ -1514,6 +1588,22 @@ function wire() {
   // picker
   $('btnPickerClose').onclick = () => { $('pickerBackdrop').hidden = true; };
   $('pickerFilter').addEventListener('input', debounce(renderPicker, 150));
+  // On a phone the sort and year filters are a screenful of chrome above the
+  // music. They stay one tap away instead.
+  $('btnFilters').onclick = () => {
+    const open = document.querySelector('.controls').classList.toggle('show-filters');
+    $('btnFilters').setAttribute('aria-expanded', open ? 'true' : 'false');
+  };
+
+  $('layoutToggle').onclick = (e) => {
+    const btn = e.target.closest('button[data-layout]');
+    if (!btn) return;
+    state.layout = btn.dataset.layout;
+    state.rendered = PAGE;
+    savePrefs();
+    render();
+  };
+
   $('btnRange').onclick = () => setRangeMode(!rangeMode);
   $('pickerScope').onclick = (e) => {
     const btn = e.target.closest('button[data-scope]');
@@ -1576,7 +1666,7 @@ async function start() {
   loadPrefs();
   wire();
 
-  document.querySelectorAll('.seg').forEach((s) => {
+  document.querySelectorAll('.seg[data-view]').forEach((s) => {
     s.classList.toggle('is-active', s.dataset.view === state.view);
   });
   $('sort').value = state.sort;

@@ -572,6 +572,65 @@ test('ranges can be selected without a keyboard', async () => {
   await page.setViewportSize({ width: 1280, height: 720 });
 });
 
+test('albums can be browsed as a compact list instead of covers', async () => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.click('#btnReset');
+  await page.waitForSelector('.album');
+
+  await page.click('.seg[data-layout="list"]');
+  await page.waitForSelector('.arow');
+  assert.equal(await page.locator('.album').count(), 0, 'no cover cards remain');
+  assert.equal(await page.locator('.arow').count(), 6, 'one row per album');
+
+  // A row carries the same actions as a card.
+  const first = page.locator('.arow').first();
+  assert.ok(await first.locator('button[title="Play now"]').isVisible());
+  assert.ok(await first.locator('.tick').isVisible());
+
+  // The title must actually get the space the grid gives it: an absolutely
+  // positioned tick and a non-stretching button both collapsed it to 44px.
+  const widths = await page.evaluate(() => {
+    const row = document.querySelector('.arow');
+    return {
+      cell: row.querySelector('.arow-id').getBoundingClientRect().width,
+      art: row.querySelector('img, .noart').getBoundingClientRect().width,
+    };
+  });
+  assert.ok(widths.cell > widths.art * 2, `title cell too narrow: ${widths.cell}px`);
+
+  await page.click('.seg[data-layout="grid"]');
+  await page.waitForSelector('.album');
+});
+
+test('a phone defaults to the list, a desktop to covers', async () => {
+  // browser.newPage() gets its own storage, so each one is seeded from scratch.
+  async function firstRunAt(width, height) {
+    const p = await browser.newPage({ viewport: { width, height } });
+    await p.route('**/api/crate*', (r) => r.fulfill({
+      status: 404, contentType: 'application/json', body: '{}',
+    }));
+    await p.route('**://api.spotify.com/**', (r) => r.abort());
+    await p.route('**://accounts.spotify.com/**', (r) => r.abort());
+    await p.goto(BASE_URL);
+    await seed(p, fakeCrate());
+    // No stored preference: this is someone's first visit on this device.
+    await p.evaluate(() => localStorage.removeItem('crate.prefs'));
+    await p.reload();
+    await p.waitForSelector('#app:not([hidden])');
+    return p;
+  }
+
+  const phone = await firstRunAt(390, 700);
+  await phone.waitForSelector('.arow', { timeout: 15000 });
+  assert.equal(await phone.locator('.album').count(), 0, 'phones start as a list');
+  await phone.close();
+
+  const desk = await firstRunAt(1280, 800);
+  await desk.waitForSelector('.album', { timeout: 15000 });
+  assert.equal(await desk.locator('.arow').count(), 0, 'desktops start as covers');
+  await desk.close();
+});
+
 test('nothing threw along the way', () => {
   assert.deepEqual(consoleErrors, []);
 });

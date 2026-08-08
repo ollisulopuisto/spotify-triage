@@ -103,6 +103,11 @@
       <button class="seg" data-view="tracks" role="tab">Tracks</button>
     </div>
 
+    <div class="segmented" id="layoutToggle" role="tablist" aria-label="How to show albums">
+      <button class="seg" data-layout="grid" role="tab">Covers</button>
+      <button class="seg" data-layout="list" role="tab">List</button>
+    </div>
+
     <label class="ctl">Sort
       <select id="sort"></select>
     </label>
@@ -119,6 +124,7 @@
       <input id="addedTo" class="year" type="number" inputmode="numeric" placeholder="to">
     </label>
 
+    <button id="btnFilters" class="btn btn-small btn-quiet" aria-expanded="false">Filters</button>
     <button id="btnShuffle" class="btn btn-small" title="Reroll the shuffle">Surprise me</button>
     <button id="btnReset" class="btn btn-small btn-quiet">Reset</button>
   </div>
