@@ -4,6 +4,7 @@ import {
   cancelInFlight, resetCancel, setPacing, BULK_PACING_MS,
 } from './api.js';
 import * as auth from './auth.js';
+import * as cloud from './cloud.js';
 import {
   buildLibrary, groupAlbums, search, sortResults, facets, SORTS,
   alphaCounts, initialOf, artUrl, filedYearOf, yearCounts, byBucket,
@@ -313,6 +314,8 @@ async function sync({ full = false } = {}) {
     await db.setMeta('lastSync', state.lastSync);
     await db.setMeta('selectedPlaylistIds', [...state.selectedPlaylists]);
     await loadCache();
+    // Best effort: a failed upload must never look like a failed sync.
+    pushToCloud().catch((err) => console.warn('[crate] cloud push failed:', err && err.message));
 
     const unchanged = wanted.length - fetched - skipped.length;
     let message = state.cancelSync
@@ -749,7 +752,22 @@ function renderResults() {
       { class: 'empty' },
       h('h2', { text: 'Your crate is empty' }),
       h('p', { text: 'Choose which playlists belong in it, then sync.' }),
-      h('p', {}, h('button', { class: 'btn btn-primary', onclick: openPicker, text: 'Choose playlists' })),
+      h(
+        'p',
+        {},
+        h('button', { class: 'btn btn-primary', onclick: openPicker, text: 'Choose playlists' }),
+      ),
+      // Reading from Spotify takes minutes on a new device; this takes one request.
+      h(
+        'p',
+        {},
+        h('button', {
+          id: 'btnRestore',
+          class: 'btn btn-quiet btn-small',
+          onclick: () => { pullFromCloud(); },
+          text: 'Restore from another device',
+        }),
+      ),
     ));
     return;
   }
@@ -887,6 +905,49 @@ function readFilters() {
   state.filters.addedFrom = numOrNull($('addedFrom'));
   state.filters.addedTo = numOrNull($('addedTo'));
   state.rendered = PAGE;
+}
+
+// --- cross-device copy -----------------------------------------------------
+
+async function pushToCloud() {
+  const payload = cloud.snapshotOf(state.cached, state.selectedPlaylists, state.lastSync);
+  const { bytes } = await cloud.push(payload);
+  console.info('[crate] cloud copy updated,', Math.round(bytes / 1024), 'kB');
+}
+
+async function pullFromCloud({ quiet = false } = {}) {
+  showProgress('Fetching your saved crate');
+  try {
+    const data = await cloud.pull();
+    if (!data) {
+      // On boot this is the ordinary case, not a problem worth a banner.
+      if (!quiet) banner('Nothing saved yet — sync on a device that has your crate first.');
+      return false;
+    }
+
+    setProgress(`${plural(data.playlists.length, 'playlist', 'playlists')}…`, 0, 0);
+    for (const p of data.playlists) {
+      // eslint-disable-next-line no-await-in-loop
+      await db.putPlaylist(p);
+    }
+    await db.setMeta('selectedPlaylistIds', data.selectedPlaylistIds || data.playlists.map((p) => p.id));
+    if (data.lastSync) await db.setMeta('lastSync', data.lastSync);
+
+    await loadCache();
+    banner(
+      `Restored ${plural(state.library.tracks.length, 'track', 'tracks')} from your saved crate`
+      + ' — no Spotify requests needed.',
+      'ok',
+    );
+    return true;
+  } catch (err) {
+    if (!quiet) banner(describeError(err));
+    else console.warn('[crate] cloud restore skipped:', err && err.message);
+    return false;
+  } finally {
+    hideProgress();
+    render();
+  }
 }
 
 // --- album action sheet ----------------------------------------------------
@@ -1388,8 +1449,14 @@ async function start() {
   render();
 
   if (!state.cached.length) {
-    banner('Signed in. Now choose which playlists make up your crate.', 'ok');
-    await openPicker();
+    // A device with nothing cached would otherwise re-read every playlist from
+    // Spotify — minutes of paced requests. If this account has a saved copy,
+    // one request replaces all of it.
+    const restored = await pullFromCloud({ quiet: true });
+    if (!restored) {
+      banner('Signed in. Now choose which playlists make up your crate.', 'ok');
+      await openPicker();
+    }
   }
 }
 

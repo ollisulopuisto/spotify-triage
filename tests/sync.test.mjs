@@ -59,6 +59,7 @@ const server = {
     played: [],
     queued: [],
     stamps: [],
+    cloudPuts: [],
   },
 };
 
@@ -87,6 +88,31 @@ function json(route, body) {
     contentType: 'application/json',
     headers: { 'Access-Control-Allow-Origin': '*' },
     body: JSON.stringify(body),
+  });
+}
+
+let cloudStore = null;
+
+async function installCloudMock(page) {
+  await page.route('**/api/crate', async (route) => {
+    const method = route.request().method();
+    // The real endpoint refuses anything without a Spotify bearer token.
+    if (!/^Bearer \S+/.test(route.request().headers().authorization || '')) {
+      return route.fulfill({ status: 401, contentType: 'application/json', body: '{}' });
+    }
+    if (method === 'PUT') {
+      cloudStore = route.request().postData();
+      server.counters.cloudPuts.push(cloudStore.length);
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ ok: true, bytes: cloudStore.length }),
+      });
+    }
+    if (!cloudStore) {
+      return route.fulfill({ status: 404, contentType: 'application/json', body: '{}' });
+    }
+    return route.fulfill({ status: 200, contentType: 'application/json', body: cloudStore });
   });
 }
 
@@ -264,7 +290,8 @@ test.before(async () => {
     // induces 403s on purpose, so that line is expected, not a defect.
     // Chromium logs the bare status line and the app logs its own 403 detail;
     // the forbidden-playlist tests induce both deliberately.
-    const expected = /Failed to load resource.*(403|429)/.test(m.text())
+    // 404: a device with nothing stored yet asks /api/crate and is told so.
+    const expected = /Failed to load resource.*(403|404|429)/.test(m.text())
       || /^\[crate\] 403 /.test(m.text());
     if (m.type() === 'error' && !expected) {
       errors.push(m.text());
@@ -272,6 +299,7 @@ test.before(async () => {
   });
 
   await installMock(page);
+  await installCloudMock(page);
   await page.goto(BASE_URL);
   // Signed in, but nothing cached: the app should offer the picker.
   await page.evaluate(() => {
@@ -691,6 +719,48 @@ test('a bulk sync paces itself instead of bursting into the rate limit', async (
   const gaps = stamps.slice(1).map((t, i) => t - stamps[i]);
   const tooFast = gaps.filter((g) => g < 100).length;
   assert.equal(tooFast, 0, `every request should be spaced; gaps were ${gaps.join(',')}`);
+});
+
+test('a completed sync is copied to the cross-device store', async () => {
+  server.counters.cloudPuts = [];
+  await clearBanner(page);
+  server.playlists.forEach((p, i) => { p.snapshot = `cloud-${i}`; });
+
+  await page.click('#btnSync');
+  await waitForSync(page);
+  await page.waitForFunction(() => true);
+
+  // The push is best effort and fires after the banner, so give it a moment.
+  await page.waitForTimeout(500);
+  assert.ok(server.counters.cloudPuts.length >= 1, 'the crate was uploaded');
+  assert.ok(server.counters.cloudPuts[0] > 100, 'and it was not empty');
+});
+
+test('a fresh device restores from the store without touching Spotify', async () => {
+  const fresh = await browser.newPage();
+  await installMock(fresh);
+  await installCloudMock(fresh);
+  await fresh.goto(BASE_URL);
+  await fresh.evaluate(() => {
+    localStorage.setItem('crate.clientId', 'b'.repeat(32));
+    localStorage.setItem('crate.tokens', JSON.stringify({
+      accessToken: 'fresh', refreshToken: 'refresh', expiresAt: Date.now() + 3600e3,
+    }));
+  });
+  resetCounters();
+  await fresh.reload();
+
+  // An empty device restores by itself rather than re-reading Spotify.
+  await fresh.waitForFunction(
+    () => /Restored/.test(document.getElementById('banner').textContent),
+    null,
+    { timeout: 20000 },
+  );
+  await fresh.waitForSelector('.album');
+  assert.equal(server.counters.trackPages, 0, 'no playlist was read from Spotify');
+  assert.equal(await fresh.isHidden('#pickerBackdrop'), true, 'and the picker did not open');
+
+  await fresh.close();
 });
 
 test('nothing threw along the way', () => {

@@ -151,7 +151,9 @@ test('signed-out visitors get setup instructions with the exact redirect URI', a
   // is required — before being asked to register anything.
   const copy = await fresh.textContent('#setup');
   assert.match(copy, /Premium/, 'the Premium requirement is stated up front');
-  assert.match(copy, /Nothing leaves your browser/i, 'the privacy claim is made');
+  // The claim has to match what the app actually does — there is a server copy.
+  assert.match(copy, /Your library stays yours/i, 'the storage claim is made');
+  assert.match(copy, /not encrypted at rest/i, 'the caveat is not buried');
   assert.match(copy, /User Management/, 'the allowlist step is included');
 
   await fresh.close();
