@@ -92,6 +92,17 @@ export default async function handler(req, res) {
 
   const pathname = pathFor(userId);
 
+  if (req.method === 'GET' && 'meta' in (req.query || {})) {
+    // Just the timestamp: enough to tell whether the stored copy is newer than
+    // what this device holds, without shipping several megabytes to find out.
+    try {
+      const meta = await head(pathname);
+      return json(res, 200, { uploadedAt: meta.uploadedAt || null, bytes: meta.size || 0 });
+    } catch {
+      return json(res, 404, { error: 'No crate stored yet.' });
+    }
+  }
+
   if (req.method === 'GET') {
     try {
       // Private blobs are not publicly readable, so fetch through the store.

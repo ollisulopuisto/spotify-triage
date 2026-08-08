@@ -114,7 +114,12 @@ const consoleErrors = [];
 test.before(async () => {
   browser = await chromium.launch();
   page = await browser.newPage();
-  page.on('console', (m) => { if (m.type() === 'error') consoleErrors.push(m.text()); });
+  page.on('console', (m) => {
+    // A device with nothing stored asks /api/crate and is told 404. That is the
+    // ordinary first-run case, and the browser logs it whatever we do.
+    const expected = /Failed to load resource.*404/.test(m.text());
+    if (m.type() === 'error' && !expected) consoleErrors.push(m.text());
+  });
   page.on('pageerror', (e) => consoleErrors.push(String(e)));
 
   // Fail loudly rather than silently hitting the network.
@@ -130,6 +135,15 @@ test.before(async () => {
     headers: { 'Access-Control-Allow-Origin': '*' },
     body: JSON.stringify({ devices: [] }),
   }));
+
+  // This suite serves static files only, so the app's own endpoint is stubbed:
+  // nothing stored, uploads accepted and discarded.
+  await page.route('**/api/crate*', (r) => {
+    if (r.request().method() === 'PUT') {
+      return r.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true,"bytes":2}' });
+    }
+    return r.fulfill({ status: 404, contentType: 'application/json', body: '{}' });
+  });
 
   await page.goto(BASE_URL);
   await seed(page, fakeCrate());

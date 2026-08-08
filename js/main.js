@@ -924,10 +924,39 @@ function readFilters() {
 
 // --- cross-device copy -----------------------------------------------------
 
+const LS_PUSHED = 'crate.pushedSync';
+
 async function pushToCloud() {
   const payload = cloud.snapshotOf(state.cached, state.selectedPlaylists, state.lastSync);
   const { bytes } = await cloud.push(payload);
+  // Remember what was uploaded so a reload does not re-send 7MB for nothing.
+  localStorage.setItem(LS_PUSHED, state.lastSync || '');
   console.info('[crate] cloud copy updated,', Math.round(bytes / 1024), 'kB');
+}
+
+// Tying the upload to a sync means you cannot back up while rate-limited —
+// precisely when the copy matters most. Any load with unsaved changes does it,
+// and with a stored pass this costs Spotify nothing.
+async function backUpIfStale() {
+  if (!state.cached.length || !state.lastSync) return;
+  if (localStorage.getItem(LS_PUSHED) === state.lastSync) return;
+  try {
+    // Never overwrite a copy written after our own data was synced: that copy
+    // came from another device and knows things this one does not.
+    const stored = await cloud.storedAt();
+    if (stored && new Date(stored) > new Date(state.lastSync)) {
+      console.warn('[crate] stored copy is newer than this device; not overwriting it');
+      banner(
+        'Another device has a newer crate saved. Sync here to catch up, or restore it.',
+        'warn',
+        { label: 'Restore it', onClick: () => { banner(''); pullFromCloud(); } },
+      );
+      return;
+    }
+    await pushToCloud();
+  } catch (err) {
+    console.warn('[crate] cloud backup skipped:', err && err.message);
+  }
 }
 
 async function pullFromCloud({ quiet = false } = {}) {
@@ -949,6 +978,9 @@ async function pullFromCloud({ quiet = false } = {}) {
     if (data.lastSync) await db.setMeta('lastSync', data.lastSync);
 
     await loadCache();
+    // We now hold exactly what the store holds: nothing to push back, and no
+    // reason to warn that the store is ahead of us.
+    localStorage.setItem(LS_PUSHED, state.lastSync || '');
     banner(
       `Restored ${plural(state.library.tracks.length, 'track', 'tracks')} from your saved crate`
       + ' — no Spotify requests needed.',
@@ -1478,6 +1510,7 @@ async function start() {
 
   // Devices are a Spotify call, so it waits until the crate is in hand.
   loadDevices();
+  backUpIfStale();
 }
 
 start();

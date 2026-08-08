@@ -12,7 +12,7 @@ const LS_PASS = 'crate.cloudPass';
 // The server mints a pass after verifying us with Spotify once. Keeping it
 // means later calls need no Spotify round trip — which matters precisely when
 // Spotify is rate-limiting, since that is when the copy is most useful.
-async function authed(method, body) {
+async function authed(method, body, query = '') {
   const pass = localStorage.getItem(LS_PASS);
   const headers = { ...(body ? { 'Content-Type': 'application/json' } : {}) };
   if (pass) headers['X-Crate-Pass'] = pass;
@@ -21,7 +21,7 @@ async function authed(method, body) {
   // fail while rate-limited.
   if (!pass) headers.Authorization = `Bearer ${await getAccessToken()}`;
 
-  const res = await fetch(ENDPOINT, { method, headers, body });
+  const res = await fetch(ENDPOINT + query, { method, headers, body });
 
   const minted = res.headers.get('X-Crate-Pass');
   if (minted) localStorage.setItem(LS_PASS, minted);
@@ -51,6 +51,15 @@ export async function push(payload) {
     throw new Error((detail && detail.error) || `Upload failed (${res.status}).`);
   }
   return res.json();
+}
+
+// When the stored copy was last written, or null if there is none. Cheap: no
+// payload comes back.
+export async function storedAt() {
+  const res = await authed('GET', null, '?meta=1');
+  if (!res.ok) return null;
+  const data = await res.json().catch(() => null);
+  return (data && data.uploadedAt) || null;
 }
 
 // Returns null when this account has never pushed, which is not an error.

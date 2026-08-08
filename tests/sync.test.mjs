@@ -93,11 +93,13 @@ function json(route, body) {
 }
 
 let cloudStore = null;
+let cloudUploadedAt = null;
 
 // Mirrors the real endpoint: a Spotify token buys a pass, and the pass alone
 // is enough afterwards — including while Spotify is rate-limiting.
 async function installCloudMock(page) {
-  await page.route('**/api/crate', async (route) => {
+  // The glob must allow a query string: ?meta=1 would otherwise slip past.
+  await page.route('**/api/crate*', async (route) => {
     const method = route.request().method();
     const headers = route.request().headers();
     const hasPass = headers['x-crate-pass'] === 'test-pass';
@@ -119,12 +121,24 @@ async function installCloudMock(page) {
     };
     if (method === 'PUT') {
       cloudStore = route.request().postData();
+      cloudUploadedAt = new Date().toISOString();
       server.counters.cloudPuts.push(cloudStore.length);
       return route.fulfill({
         status: 200,
         contentType: 'application/json',
         headers: mint,
         body: JSON.stringify({ ok: true, bytes: cloudStore.length }),
+      });
+    }
+    if (new URL(route.request().url()).searchParams.has('meta')) {
+      if (!cloudStore) {
+        return route.fulfill({ status: 404, contentType: 'application/json', headers: mint, body: '{}' });
+      }
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        headers: mint,
+        body: JSON.stringify({ uploadedAt: cloudUploadedAt, bytes: cloudStore.length }),
       });
     }
     if (!cloudStore) {
@@ -863,6 +877,72 @@ test('without a pass, a rate-limited identity check says so honestly', async () 
 
   server.spotifyIdentityDown = false;
   await fresh.close();
+});
+
+// These two share a browser context, so each one establishes the crate it needs
+// rather than inheriting whatever the previous test left behind.
+async function deviceWithCrate(pass) {
+  const fresh = await browser.newPage();
+  await installMock(fresh);
+  await installCloudMock(fresh);
+  await fresh.goto(BASE_URL);
+  await fresh.evaluate((p) => {
+    localStorage.setItem('crate.clientId', 'e'.repeat(32));
+    localStorage.setItem('crate.tokens', JSON.stringify({
+      accessToken: 'tok', refreshToken: 'ref', expiresAt: Date.now() + 3600e3,
+    }));
+    localStorage.setItem('crate.cloudPass', p);
+  }, pass);
+
+  // Populate this device from the store, so it holds a crate either way.
+  cloudUploadedAt = '2000-01-01T00:00:00Z';
+  await fresh.reload();
+  await fresh.waitForSelector('.album', { timeout: 20000 });
+  return fresh;
+}
+
+test('a device with an unsaved crate backs itself up on load', async () => {
+  const fresh = await deviceWithCrate('test-pass');
+
+  // Nothing saved since this device last synced: opening the app is enough.
+  await fresh.evaluate(() => localStorage.removeItem('crate.pushedSync'));
+  cloudUploadedAt = '2000-01-01T00:00:00Z';
+  server.counters.cloudPuts = [];
+
+  await fresh.reload();
+  await fresh.waitForSelector('.album');
+  await fresh.waitForTimeout(1200);
+  assert.ok(server.counters.cloudPuts.length >= 1, 'it uploaded without being asked');
+
+  // And a second load does not re-send the same thing.
+  server.counters.cloudPuts = [];
+  await fresh.reload();
+  await fresh.waitForSelector('.album');
+  await fresh.waitForTimeout(1000);
+  assert.equal(server.counters.cloudPuts.length, 0, 'no pointless re-upload');
+
+  await fresh.close();
+});
+
+test('an older device does not overwrite a newer crate saved elsewhere', async () => {
+  const fresh = await deviceWithCrate('test-pass');
+
+  // Another device saved something after this one last synced.
+  await fresh.evaluate(() => localStorage.removeItem('crate.pushedSync'));
+  cloudUploadedAt = '2030-01-01T00:00:00Z';
+  server.counters.cloudPuts = [];
+
+  await fresh.reload();
+  await fresh.waitForSelector('.album');
+  await fresh.waitForFunction(
+    () => /newer crate saved/i.test(document.getElementById('banner').textContent),
+    null,
+    { timeout: 15000 },
+  );
+  assert.equal(server.counters.cloudPuts.length, 0, 'the newer copy survived');
+
+  await fresh.close();
+  cloudUploadedAt = null;
 });
 
 test('nothing threw along the way', () => {
