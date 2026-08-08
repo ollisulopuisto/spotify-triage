@@ -389,6 +389,7 @@ async function sync({ full = false } = {}) {
 let pickerDraft = new Set();
 let pickerAnchorId = null; // last plainly-clicked row; shift-click ranges from here
 let pickerScope = 'all';   // all | in | out
+let rangeMode = false;     // shift-click has no equivalent on a phone
 
 // Already fetched and searchable, as opposed to merely ticked in this session.
 function inCrate(id) {
@@ -433,6 +434,25 @@ function renderPicker() {
       onclick: (e) => {
         const on = e.target.checked;
         const anchor = visible.findIndex((v) => v.id === pickerAnchorId);
+
+        // Range mode: first tap marks one end, second fills everything between.
+        if (rangeMode) {
+          if (anchor === -1) {
+            // Marking an end selects it; toggling it off would be a strange
+            // way to start choosing a run.
+            pickerAnchorId = p.id;
+            pickerDraft.add(p.id);
+            renderPicker();
+            setRangeHint('One end marked. Now tap the other end.');
+            return;
+          }
+          const [lo, hi] = anchor < idx ? [anchor, idx] : [idx, anchor];
+          for (let i = lo; i <= hi; i += 1) pickerDraft.add(visible[i].id);
+          setRangeMode(false);
+          renderPicker();
+          return;
+        }
+
         if (e.shiftKey && anchor !== -1) {
           const [lo, hi] = anchor < idx ? [anchor, idx] : [idx, anchor];
           for (let i = lo; i <= hi; i++) {
@@ -461,6 +481,20 @@ function renderPicker() {
   });
 
   updatePickerCount();
+}
+
+function setRangeHint(text) {
+  const el = $('rangeHint');
+  el.textContent = text || '';
+  el.hidden = !text;
+}
+
+function setRangeMode(on) {
+  rangeMode = on;
+  pickerAnchorId = on ? null : pickerAnchorId;
+  $('btnRange').classList.toggle('is-on', on);
+  $('btnRange').textContent = on ? 'Cancel range' : 'Select range';
+  setRangeHint(on ? 'Tap one end of the run.' : '');
 }
 
 function updatePickerCount() {
@@ -493,6 +527,7 @@ async function openPicker() {
   pickerDraft = new Set(state.selectedPlaylists);
   pickerAnchorId = null;
   pickerScope = 'all';
+  setRangeMode(false);
   $('pickerFilter').value = '';
   renderPicker();
   $('pickerBackdrop').hidden = false;
@@ -1479,6 +1514,7 @@ function wire() {
   // picker
   $('btnPickerClose').onclick = () => { $('pickerBackdrop').hidden = true; };
   $('pickerFilter').addEventListener('input', debounce(renderPicker, 150));
+  $('btnRange').onclick = () => setRangeMode(!rangeMode);
   $('pickerScope').onclick = (e) => {
     const btn = e.target.closest('button[data-scope]');
     if (!btn) return;

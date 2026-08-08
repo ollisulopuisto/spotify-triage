@@ -508,6 +508,70 @@ test('browsing by year filed uses Spotify\u2019s own added_at dates', async () =
   await showsAlbums(page, ALL_ALBUMS);
 });
 
+test('the playlist picker fits a phone, controls and all', async () => {
+  await page.setViewportSize({ width: 390, height: 700 });
+  await page.click('#btnPlaylists');
+  await page.waitForSelector('.picker-row');
+
+  const fit = await page.evaluate(() => {
+    const m = document.querySelector('#pickerBackdrop .modal').getBoundingClientRect();
+    const save = document.getElementById('btnPickerSave').getBoundingClientRect();
+    const list = document.getElementById('pickerList').getBoundingClientRect();
+    const rows = [...document.querySelectorAll('.picker-row')].filter((r) => {
+      const b = r.getBoundingClientRect();
+      return b.top >= list.top - 0.5 && b.bottom <= list.bottom + 0.5;
+    }).length;
+    return {
+      modalFits: m.top >= -0.5 && m.bottom <= window.innerHeight + 0.5,
+      saveVisible: save.bottom <= window.innerHeight + 0.5 && save.top >= 0,
+      rows,
+    };
+  });
+
+  assert.ok(fit.modalFits, 'the dialog fits on screen');
+  assert.ok(fit.saveVisible, 'Save and sync is reachable without scrolling the dialog');
+  assert.ok(fit.rows >= 5, `expected a usable list, saw ${fit.rows} rows`);
+
+  await page.click('#btnPickerClose');
+  await page.setViewportSize({ width: 1280, height: 720 });
+});
+
+test('ranges can be selected without a keyboard', async () => {
+  await page.setViewportSize({ width: 390, height: 700 });
+  await page.click('#btnPlaylists');
+  await page.waitForSelector('.picker-row');
+  await page.click('#btnUnpickMatching');
+  await page.waitForFunction(
+    () => /^0 playlists selected/.test(document.getElementById('pickerCount').textContent),
+  );
+
+  await page.click('#btnRange');
+  const rows = page.locator('.picker-row');
+  await rows.nth(2).locator('input[type=checkbox]').click();
+  // The first tap only marks one end, and says so.
+  await page.waitForFunction(
+    () => /other end/i.test(document.getElementById('rangeHint').textContent),
+  );
+  assert.equal(
+    await rows.nth(2).locator('input[type=checkbox]').isChecked(),
+    true,
+    'marking an end selects it rather than clearing it',
+  );
+
+  await rows.nth(6).locator('input[type=checkbox]').click();
+  await page.waitForFunction(
+    () => /^5 playlists selected/.test(document.getElementById('pickerCount').textContent),
+  );
+  for (const i of [2, 3, 4, 5, 6]) {
+    assert.equal(await rows.nth(i).locator('input[type=checkbox]').isChecked(), true, `row ${i}`);
+  }
+  // Mode ends after one range, so the next tap is an ordinary tick.
+  assert.equal(await page.isVisible('#rangeHint'), false);
+
+  await page.click('#btnPickerClose');
+  await page.setViewportSize({ width: 1280, height: 720 });
+});
+
 test('nothing threw along the way', () => {
   assert.deepEqual(consoleErrors, []);
 });
