@@ -66,8 +66,14 @@ const pathFor = (userId) => `crates/${encodeURIComponent(userId)}.json`;
 // Ask Spotify how long a lockout has left. Browsers cannot read Retry-After
 // (Spotify sends no Access-Control-Expose-Headers), but a server can — so the
 // one number that matters during a rate limit stops being invisible.
+//
+// Probe the endpoint the app is actually blocked on. /me kept answering while
+// /me/playlists was refused, so testing /me reported "all clear" during a
+// lockout — worse than not checking.
+const SPOTIFY_PROBE = 'https://api.spotify.com/v1/me/playlists?limit=1';
+
 async function probe(auth) {
-  const r = await fetch(SPOTIFY_ME, { headers: { Authorization: auth } });
+  const r = await fetch(SPOTIFY_PROBE, { headers: { Authorization: auth } });
   if (r.status !== 429) return { ok: r.ok, status: r.status };
 
   const seconds = Number(r.headers.get('Retry-After') || 0);

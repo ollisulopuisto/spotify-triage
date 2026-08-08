@@ -993,6 +993,46 @@ test('the app can tell you how long a lockout has left', async () => {
   await page.evaluate(() => localStorage.removeItem('crate.cooldownUntil'));
 });
 
+test('a clear-again check does not send an empty device to Sync', async () => {
+  const fresh = await browser.newPage();
+  await installMock(fresh);
+  await installCloudMock(fresh);
+  await fresh.goto(BASE_URL);
+  await fresh.evaluate(() => {
+    localStorage.setItem('crate.clientId', 'g'.repeat(32));
+    localStorage.setItem('crate.tokens', JSON.stringify({
+      accessToken: 'tok', refreshToken: 'ref', expiresAt: Date.now() + 3600e3,
+    }));
+    localStorage.setItem('crate.cloudPass', 'test-pass');
+  });
+
+  // Nothing stored and nothing selected: the state a new phone is in.
+  cloudStore = null;
+  server.probeAnswer = { ok: true, status: 200 };
+  await fresh.reload();
+  await fresh.waitForSelector('#pickerBackdrop:not([hidden])', { timeout: 20000 });
+  await fresh.click('#btnPickerClose');
+  await fresh.evaluate(() => {
+    // Wipe the selection this device inherited from shared storage.
+    indexedDB.deleteDatabase('spotify-crate');
+    localStorage.removeItem('crate.pushedSync');
+  });
+  await fresh.reload();
+  await fresh.waitForSelector('#pickerBackdrop:not([hidden])', { timeout: 20000 });
+  await fresh.click('#btnPickerClose');
+
+  await fresh.click('#btnCheckLimit');
+  await fresh.waitForFunction(
+    () => /answering again/i.test(document.getElementById('banner').textContent),
+    null,
+    { timeout: 15000 },
+  );
+  // Offers the thing that actually works on this device.
+  assert.match(await fresh.textContent('#bannerAction'), /Choose playlists/);
+
+  await fresh.close();
+});
+
 test('nothing threw along the way', () => {
   assert.deepEqual(errors, []);
 });

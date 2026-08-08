@@ -948,10 +948,12 @@ async function checkRateLimit() {
     const r = await cloud.probeSpotify();
     if (r.ok) {
       clearCooldown();
-      banner('Spotify is answering again.', 'ok', {
-        label: 'Sync now',
-        onClick: () => { banner(''); sync(); },
-      });
+      // A device with nothing selected cannot sync; sending it to Sync just
+      // produces "No playlists selected yet".
+      const ready = state.selectedPlaylists.size > 0;
+      banner('Spotify is answering again.', 'ok', ready
+        ? { label: 'Sync now', onClick: () => { banner(''); sync(); } }
+        : { label: 'Choose playlists', onClick: () => { banner(''); openPicker(); } });
       return;
     }
 
