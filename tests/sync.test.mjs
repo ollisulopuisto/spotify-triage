@@ -46,6 +46,7 @@ const server = {
   rateLimitOnce: false,
   spotifyIdentityDown: false,  // Spotify 429s even /me
   probeAnswer: { ok: true, status: 200 },
+  rateLimitTracks: false,
   rateLimitTimes: 0,      // 429 this many more catalog reads
   rateLimitRetryAfter: 2, // what the header says
   devices: [
@@ -62,6 +63,7 @@ const server = {
     queued: [],
     stamps: [],
     cloudPuts: [],
+    refusedPlaylists: new Set(),
   },
 };
 
@@ -75,13 +77,19 @@ function waitForSync(page) {
 }
 
 function clearBanner(page) {
-  return page.evaluate(() => { document.getElementById('banner').hidden = true; });
+  return page.evaluate(() => {
+    const b = document.getElementById('banner');
+    b.hidden = true;
+    // Leaving stale text behind has fooled three tests into passing instantly.
+    b.textContent = '';
+  });
 }
 
 function resetCounters() {
   server.counters.catalog = 0;
   server.counters.trackPages = 0;
   server.counters.trackFetchesByPlaylist = {};
+  server.counters.refusedPlaylists = new Set();
 }
 
 function json(route, body) {
@@ -262,6 +270,16 @@ async function installMock(page) {
           contentType: 'application/json',
           headers: { 'Access-Control-Allow-Origin': '*' },
           body: JSON.stringify({ error: { status: 403, message: 'Forbidden' } }),
+        });
+      }
+      if (server.rateLimitTracks) {
+        // Count refusals too, or "did it stop?" cannot be answered.
+        server.counters.refusedPlaylists.add(id);
+        return route.fulfill({
+          status: 429,
+          contentType: 'application/json',
+          headers: { 'Access-Control-Allow-Origin': '*' },
+          body: JSON.stringify({ error: { status: 429, message: 'Too Many Requests' } }),
         });
       }
       const pl = server.playlists.find((p) => p.id === id);
@@ -583,6 +601,7 @@ test('the picker separates what is already in the crate from what is not', async
 
 test('a rate-limited sync says it is waiting instead of looking hung', async () => {
   await clearBanner(page);
+  await page.evaluate(() => window.__crateRateBudget(null));
   server.rateLimitOnce = true;
   await page.click('#btnSync');
 
@@ -602,6 +621,7 @@ test('a rate-limited sync says it is waiting instead of looking hung', async () 
 
 test('a persistent rate limit gives up and holds off, instead of hammering', async () => {
   await clearBanner(page);
+  await page.evaluate(() => window.__crateRateBudget(null));
   // Retry-After is unreadable cross-origin, so the mock does not send one:
   // this is exactly what the app sees in production.
   server.rateLimitTimes = 99;
@@ -1044,6 +1064,61 @@ test('playlist sizes survive the tracks-to-items rename', async () => {
   assert.match(await page.textContent('#pickerCount'), /about [\d\s,.]+tracks/);
 
   await page.click('#btnPickerClose');
+});
+
+test('a bulk sync stays inside a rolling request budget', async () => {
+  await clearBanner(page);
+  await page.evaluate(() => localStorage.removeItem('crate.cooldownUntil'));
+  // Shrink the window so the shape is testable in seconds rather than minutes.
+  await page.evaluate(() => window.__crateRateBudget(4, 1000));
+  server.playlists.forEach((p, i) => { p.snapshot = `budget-${i}`; });
+  server.counters.stamps = [];
+
+  await page.click('#btnSync');
+  await waitForSync(page);
+
+  const stamps = server.counters.stamps;
+  assert.ok(stamps.length >= 6, `need enough requests to judge, got ${stamps.length}`);
+
+  // No 1s window may hold more than the budget.
+  let worst = 0;
+  for (let i = 0; i < stamps.length; i += 1) {
+    const inWindow = stamps.filter((t) => t >= stamps[i] && t < stamps[i] + 1000).length;
+    worst = Math.max(worst, inWindow);
+  }
+  assert.ok(worst <= 4, `budget of 4/s exceeded: saw ${worst}`);
+
+  await page.evaluate(() => window.__crateRateBudget(null));
+});
+
+test('a rate limit stops the run instead of marching through the rest', async () => {
+  await clearBanner(page);
+  await page.evaluate(() => localStorage.removeItem('crate.cooldownUntil'));
+  server.playlists.forEach((p, i) => { p.snapshot = `abort-${i}`; });
+  // Refuse every track read, the way a live penalty does.
+  server.forbidden.clear();
+  server.rateLimitTracks = true;
+  await page.evaluate(() => window.__crateRateBudget(null));
+  resetCounters();
+
+  await page.click('#btnSync');
+  await page.waitForFunction(
+    () => {
+      const b = document.getElementById('banner');
+      // Visible, not merely holding text from an earlier test.
+      return !b.hidden && /rate-limiting|Synced/.test(b.textContent);
+    },
+    null,
+    { timeout: 120000 },
+  );
+
+  // It must give up, not attempt all three playlists in turn.
+  const attempted = server.counters.refusedPlaylists.size;
+  assert.ok(attempted >= 1, 'the first playlist was attempted');
+  assert.ok(attempted <= 1, `should stop after the first refusal, tried ${attempted}`);
+
+  server.rateLimitTracks = false;
+  await page.evaluate(() => localStorage.removeItem('crate.cooldownUntil'));
 });
 
 test('nothing threw along the way', () => {

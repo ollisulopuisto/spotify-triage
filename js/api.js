@@ -82,15 +82,61 @@ export function setPacing(ms) {
   basePacing = Math.max(0, ms || 0);
 }
 
+// Spotify meters a rolling 30-second window, so a flat delay is the wrong
+// shape: it either wastes time or drifts over the line. Meter the same way
+// they do. 60 per 30s is a third of the observed ceiling — a full sync of 200
+// playlists takes several minutes, which is the correct trade for not being
+// locked out for hours.
+let budgetMax = 60;
+let budgetWindowMs = 30000;
+let recent = [];
+
+export function setRateBudget(max, windowMs) {
+  budgetMax = max == null ? 60 : max;
+  budgetWindowMs = windowMs || 30000;
+  recent = [];
+}
+
+// Wait until sending one more request keeps us inside the window.
+async function takeSlot() {
+  for (;;) {
+    const now = Date.now();
+    recent = recent.filter((t) => now - t < budgetWindowMs);
+    if (recent.length < budgetMax) {
+      recent.push(now);
+      return;
+    }
+    throwIfCancelled();
+    // Sleep exactly until the oldest request ages out.
+    // eslint-disable-next-line no-await-in-loop
+    await sleep(Math.max(50, budgetWindowMs - (now - recent[0]) + 20));
+  }
+}
+
+// Repeated refusals mean our budget is still too generous for this account.
+function tightenBudget() {
+  budgetMax = Math.max(10, Math.floor(budgetMax / 2));
+  cleanRun = 0;
+  console.warn(`[crate] tightening request budget to ${budgetMax} per`
+    + ` ${Math.round(budgetWindowMs / 1000)}s`);
+}
+
 function easeOff() {
   gapMs = Math.min(gapMs * 2 + 250, 2000);
   cleanRun = 0;
 }
 
+const BUDGET_CEILING = 60;
+
 function easeOn() {
   cleanRun += 1;
-  if (gapMs && cleanRun >= 40) {
-    gapMs = Math.floor(gapMs / 2);
+  if (cleanRun >= 40) {
+    // Recover both the gap and the budget, or one bad minute throttles the
+    // rest of the session.
+    if (gapMs) gapMs = Math.floor(gapMs / 2);
+    if (budgetMax < BUDGET_CEILING) {
+      budgetMax = Math.min(BUDGET_CEILING, budgetMax * 2);
+    }
     cleanRun = 0;
   }
 }
@@ -143,6 +189,7 @@ async function request(path, {
   throwIfCancelled();
   const wait = Math.max(gapMs, basePacing);
   if (wait) await sleep(wait);
+  await takeSlot();
   throwIfCancelled();
 
   const token = await getAccessToken({ force: retriedAuth });
@@ -163,6 +210,7 @@ async function request(path, {
 
   if (res.status === 429) {
     easeOff();
+    tightenBudget();
     // Retry-After is unreadable cross-origin, so it is only ever a bonus.
     const stated = Number(res.headers.get('Retry-After') || 0);
     const step = BACKOFF_SECONDS[rateAttempt];

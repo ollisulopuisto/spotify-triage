@@ -2,6 +2,7 @@ import { db } from './db.js';
 import {
   api, SpotifyError, setWaitReporter, cooldownRemaining, describeDuration,
   cancelInFlight, resetCancel, setPacing, BULK_PACING_MS, clearCooldown, setCooldown,
+  setRateBudget,
 } from './api.js';
 import * as auth from './auth.js';
 import * as cloud from './cloud.js';
@@ -300,6 +301,7 @@ async function sync({ full = false } = {}) {
 
     let done = 0;
     let fetched = 0;
+    let limitHit = null;
     const skipped = [];
 
     for (const id of wanted) {
@@ -328,6 +330,12 @@ async function sync({ full = false } = {}) {
         await db.putPlaylist({ ...meta, tracks, syncedAt: new Date().toISOString() });
         fetched += 1;
       } catch (err) {
+        // A rate limit is not a property of this playlist: carrying on would
+        // attempt the remaining 190 and deepen the penalty. Stop the run.
+        if (err instanceof SpotifyError && err.status === 429) {
+          limitHit = err;
+          break;
+        }
         // One unreadable playlist must not cost the other 179. Spotify 403s
         // editorial and algorithmic lists for apps in development mode, and a
         // playlist can vanish mid-sync; keep going and report it at the end.
@@ -341,6 +349,18 @@ async function sync({ full = false } = {}) {
     await loadCache();
     // Best effort: a failed upload must never look like a failed sync.
     pushToCloud().catch((err) => console.warn('[crate] cloud push failed:', err && err.message));
+
+    if (limitHit) {
+      // Everything fetched so far is already saved, and a later run resumes
+      // from there, so this is a pause rather than a failure.
+      banner(
+        `${limitHit.message} Kept the ${plural(fetched, 'playlist', 'playlists')} already read`
+        + ' — syncing again later picks up where this stopped.',
+        'warn',
+        { label: 'Ask Spotify', onClick: checkRateLimit },
+      );
+      return;
+    }
 
     const unchanged = wanted.length - fetched - skipped.length;
     let message = state.cancelSync
@@ -1510,7 +1530,10 @@ function wire() {
   });
 }
 
-const BUILD = 'v26.08.08.1';
+const BUILD = 'v26.08.08.2';
+
+// Exposed so tests can shrink the window; harmless in a browser.
+window.__crateRateBudget = setRateBudget;
 
 async function start() {
   console.info(`[crate] build ${BUILD}`);
