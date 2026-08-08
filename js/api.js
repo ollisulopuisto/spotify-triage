@@ -265,7 +265,9 @@ export const api = {
       id: p.id,
       name: p.name,
       snapshotId: p.snapshot_id,
-      total: p.tracks ? p.tracks.total : 0,
+      // The migration renamed the count from `tracks` to `items`; accept either
+      // so old cached catalogues and new responses both read correctly.
+      total: (p.items && p.items.total) ?? (p.tracks && p.tracks.total) ?? 0,
       owner: p.owner ? p.owner.display_name || p.owner.id : '',
       ownerId: p.owner ? p.owner.id : '',
       image: p.images && p.images.length ? p.images[p.images.length - 1].url : null,

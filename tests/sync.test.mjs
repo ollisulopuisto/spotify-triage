@@ -216,7 +216,8 @@ async function installMock(page) {
           id: p.id,
           name: p.name,
           snapshot_id: p.snapshot,
-          tracks: { total: p.count },
+          // Post-migration shape: the count moved from `tracks` to `items`.
+          items: { total: p.count },
           owner: { id: 'me', display_name: 'Me' },
           images: [],
           external_urls: { spotify: `${BASE_URL}/#${p.id}` },
@@ -1031,6 +1032,18 @@ test('a clear-again check does not send an empty device to Sync', async () => {
   assert.match(await fresh.textContent('#bannerAction'), /Choose playlists/);
 
   await fresh.close();
+});
+
+test('playlist sizes survive the tracks-to-items rename', async () => {
+  await page.click('#btnPlaylists');
+  await page.waitForSelector('#pickerBackdrop:not([hidden])');
+  await page.waitForSelector('.picker-row');
+
+  const counts = await page.locator('.picker-row .n').allTextContents();
+  assert.ok(counts.some((c) => Number(c) > 0), `every playlist showed 0: ${counts.join(',')}`);
+  assert.match(await page.textContent('#pickerCount'), /about [\d\s,.]+tracks/);
+
+  await page.click('#btnPickerClose');
 });
 
 test('nothing threw along the way', () => {
