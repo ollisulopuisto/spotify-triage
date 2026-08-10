@@ -10,7 +10,7 @@
 // function, not encrypted at rest — as the setup page says.
 
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { put, head } from '@vercel/blob';
+import { put, head, del } from '@vercel/blob';
 
 const SPOTIFY_ME = 'https://api.spotify.com/v1/me';
 // A crate of ~35k tracks is around 7MB of JSON. Leave room, refuse the absurd.
@@ -203,8 +203,10 @@ export default async function handler(req, res) {
       allowOverwrite: true,
     });
 
-    // After the crate, and never instead of it: a failed sidecar leaves the
-    // copy readable and merely undescribed, which is where we started.
+    // After the crate, and never instead of it. If it fails, the previous
+    // sidecar is still sitting there describing a crate that no longer exists,
+    // which is worse than saying nothing — a stale count is read as fact, and
+    // the whole point of the count is to be trusted. So take it away.
     const counts = countsFrom(req.headers);
     try {
       await put(sidecarFor(userId), JSON.stringify({ ...counts, bytes: body.length }), {
@@ -214,7 +216,8 @@ export default async function handler(req, res) {
         allowOverwrite: true,
       });
     } catch {
-      // Nothing to tell the client: the upload it asked for did happen.
+      // Back to "unknown", which the client already knows how to describe.
+      await del(sidecarFor(userId)).catch(() => {});
     }
 
     return json(res, 200, { ok: true, bytes: body.length, updatedAt: saved.uploadedAt || null });
