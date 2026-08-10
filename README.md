@@ -5,9 +5,14 @@ library: they are sorted by when you filed something, which is the one thing you
 never remember. Crate takes those playlists, folds them into a single searchable
 collection, and lets you dig through it by artist, album, year or month.
 
-It is a static page. No server, no build step, no account anywhere but Spotify.
-Your playlists are cached in your own browser (IndexedDB) and searched locally,
-so typing is instant and works offline once synced.
+It is a static page. No build step, no account anywhere but Spotify. Your
+playlists are cached in your own browser (IndexedDB) and searched locally, so
+typing is instant and works offline once synced.
+
+There is one small serverless function (`api/crate.js`), and it is optional: it
+keeps a copy of your synced crate so a second device does not have to re-read
+everything from Spotify. Host the folder without it and everything else still
+works — the app just logs that the backup was skipped.
 
 ## What it does
 
@@ -25,6 +30,9 @@ so typing is instant and works offline once synced.
   in what you are looking at, as one-click filters.
 - **Shuffle** for when you want the crate to surprise you rather than answer you.
 - **Save any result set back to Spotify** as a new private playlist.
+- **A cross-device copy**, if you deploy the function. A first sync on a new
+  device is several hundred Spotify requests and tends to land in the rate
+  limit; restoring the saved copy is one request.
 
 ## Setup
 
@@ -61,8 +69,9 @@ about a minute and is a one-time cost.
 Any static host works — Vercel, Netlify, GitHub Pages, an S3 bucket. There is
 nothing to build; the repo root is the site.
 
-`vercel.json` disables the install and build steps. Without it, Vercel would
-see `package.json` and spend several minutes downloading Playwright's Chromium
+`vercel.json` disables the build step and installs production dependencies only
+(`npm install --omit=dev`). The `--omit=dev` matters: a plain install would see
+Playwright in `devDependencies` and spend several minutes downloading Chromium
 to deploy a page that needs no build at all.
 
 Two things to get right:
@@ -79,8 +88,33 @@ Deploying publicly is safe: the page contains no credentials. The Client ID and
 tokens are entered and stored in each visitor's own browser, so anyone else who
 opens the URL just sees an empty setup screen.
 
-Note that the cache is per-browser. Syncing on your laptop does not populate
-your phone — each device syncs its own copy from Spotify.
+Note that the browser cache is per-device. Syncing on your laptop does not
+populate your phone — each device syncs its own copy from Spotify, unless you
+set up the cross-device copy below.
+
+### The cross-device copy (optional)
+
+`api/crate.js` stores one JSON file per Spotify account so a new device can
+restore the crate in a single request instead of several hundred. It needs two
+things on Vercel:
+
+- **A Blob store**, connected to the project (*Storage* → *Create* → *Blob* →
+  *Connect*). That sets `BLOB_READ_WRITE_TOKEN`, which `@vercel/blob` picks up
+  on its own.
+- **`CRATE_SIGNING_SECRET`**, any long random string, set as an environment
+  variable. Generate one with `openssl rand -base64 32`.
+
+The secret signs a pass the function hands back after it has verified your token
+with Spotify once. Later calls present the pass instead of a token, which is the
+whole point: when Spotify is rate-limiting your account, `/v1/me` is refused too,
+so verifying every request against Spotify would block the one path that exists
+to route around the rate limit.
+
+Without both of these the function returns errors, the app catches them, and you
+are back to a plain static page that syncs from Spotify on each device.
+
+Skip this section entirely on hosts that only serve static files (GitHub Pages,
+S3) — there is nowhere for the function to run.
 
 ### If Spotify returns 403
 
@@ -100,10 +134,18 @@ months you actually touched — typically one or two.
 
 ## Privacy
 
-The access token, the client ID and the cached playlists live in this browser
-only. Nothing is sent anywhere except to Spotify's own API. Signing out clears
-the token and leaves the cache, so you can still search offline. To wipe the
-cache entirely, clear site data for the origin.
+The access token and the client ID live in this browser only, and are never sent
+anywhere but Spotify. Signing out clears the token and leaves the cache, so you
+can still search offline. To wipe the local cache entirely, clear site data for
+the origin.
+
+If the cross-device copy is deployed, one more thing leaves the browser: the
+crate itself — playlist and track metadata, no credentials — is uploaded to the
+Blob store of whoever runs the deployment. It is a private blob, reachable only
+through the function and only with a valid token or pass for that Spotify
+account, but it is not encrypted at rest. On a personal deployment that store is
+yours. On someone else's, it is theirs. The setup screen says as much before you
+sign in.
 
 The app requests read access to your playlists, plus playlist-modify so the
 "save as playlist" button can create new ones. It never modifies or deletes an
@@ -112,14 +154,22 @@ existing playlist.
 ## Tests
 
 ```sh
-npm test          # search, grouping, ranking and sorting logic (node --test)
+npm test            # search, grouping, ranking and sorting logic (node --test)
 
-npm run serve &   # UI tests drive the real page in Chromium
-npm run test:ui
+npm run serve &     # the browser suites drive the real page in Chromium
+npm run test:ui     # the UI, against a crate seeded into IndexedDB
+npm run test:sync   # the sync path, against a mocked Spotify Web API
+
+npm run test:all    # all three
 ```
 
-The UI tests seed a fake synced crate into IndexedDB and block all network
-access to Spotify, so they never touch a real account.
+Neither browser suite touches a real account: `test:ui` seeds a fake synced crate
+into IndexedDB and blocks all network access to Spotify, and `test:sync` answers
+the Spotify endpoints itself so it can exercise pagination, `snapshot_id`
+refetching, rate-limit handling and export.
+
+The browser suites need Playwright's Chromium (`npx playwright install
+chromium`); `npm test` needs nothing but Node.
 
 ## Layout
 
@@ -130,4 +180,6 @@ access to Spotify, so they never touch a real account.
 | `js/api.js` | Web API client: pagination, 429 backoff, 401 refresh-and-retry |
 | `js/db.js` | IndexedDB cache, one record per playlist |
 | `js/library.js` | The actual library: dedup, album grouping, query parsing, ranking, facets |
+| `js/cloud.js` | Client for the cross-device copy: pass handling, push, pull, rate-limit probe |
 | `js/main.js` | State, sync orchestration and rendering |
+| `api/crate.js` | The one serverless function: stores a crate per Spotify account |
