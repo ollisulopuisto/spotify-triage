@@ -70,7 +70,7 @@ Any static host works — Vercel, Netlify, GitHub Pages, an S3 bucket. There is
 nothing to build; the repo root is the site.
 
 `vercel.json` disables the build step and installs production dependencies only
-(`npm install --omit=dev`). The `--omit=dev` matters: a plain install would see
+(`npm ci --omit=dev`). The `--omit=dev` matters: a plain install would see
 Playwright in `devDependencies` and spend several minutes downloading Chromium
 to deploy a page that needs no build at all.
 
@@ -170,6 +170,11 @@ refetching, rate-limit handling and export.
 
 The browser suites need Playwright's Chromium (`npx playwright install
 chromium`); `npm test` needs nothing but Node.
+
+All three run in GitHub Actions on every pull request and every push to `main`
+(`.github/workflows/ci.yml`), which matters because Vercel promotes `main` to
+production as soon as anything lands there. `package-lock.json` is committed so
+CI and Vercel install exactly what was tested.
 
 ## Layout
 
