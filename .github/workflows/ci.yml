@@ -1,0 +1,62 @@
+# Vercel promotes main to production the moment anything lands there, with
+# nothing in between. This is the in-between.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A second push supersedes the first: no point spending minutes on a commit
+# nobody is waiting for any more.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # First, because it needs no browser and fails in seconds. A logic
+      # regression should not wait on a Chromium download to be reported.
+      - name: Search, grouping and ranking logic
+        run: npm test
+
+      - name: Cache Chromium
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
+      - run: npx playwright install --with-deps chromium
+
+      # The browser suites drive the real page over http, so it has to be
+      # served: file:// would break the module imports and the redirect URI.
+      - name: Serve the page
+        run: |
+          nohup npm run serve > /tmp/serve.log 2>&1 &
+          for _ in $(seq 1 50); do
+            if curl -sf http://127.0.0.1:8765/ > /dev/null; then exit 0; fi
+            sleep 0.2
+          done
+          cat /tmp/serve.log >&2
+          echo "the server never came up" >&2
+          exit 1
+
+      - name: The UI, against a seeded crate
+        run: npm run test:ui
+
+      - name: The sync path, against a mocked Spotify
+        run: npm run test:sync
