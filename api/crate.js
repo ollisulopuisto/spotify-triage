@@ -10,7 +10,7 @@
 // function, not encrypted at rest — as the setup page says.
 
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { put, head } from '@vercel/blob';
+import { put, head, del } from '@vercel/blob';
 
 const SPOTIFY_ME = 'https://api.spotify.com/v1/me';
 // A crate of ~35k tracks is around 7MB of JSON. Leave room, refuse the absurd.
@@ -63,6 +63,27 @@ async function askSpotify(auth) {
 // One file per account. The id is already unique; keep the path debuggable.
 const pathFor = (userId) => `crates/${encodeURIComponent(userId)}.json`;
 
+// A few bytes alongside the crate, holding what the crate itself would cost
+// megabytes to answer: how much is in there. Without it the only comparable
+// fact about a stored copy is its size, and "1.1 MB" against "41 140 tracks"
+// is not a choice anyone can make.
+const sidecarFor = (userId) => `crates/${encodeURIComponent(userId)}.meta.json`;
+
+// Counts come from the client because the server would otherwise have to parse
+// several megabytes of JSON to learn them. They are descriptive, not load
+// bearing: nothing is authorised or overwritten on their say-so.
+function countsFrom(headers) {
+  const read = (name) => {
+    const raw = headers[name];
+    // Number('') is 0, and storing 0 for "did not say" is exactly the lie the
+    // sidecar exists to avoid.
+    if (raw === undefined || raw === null || String(raw).trim() === '') return null;
+    const n = Number(raw);
+    return Number.isInteger(n) && n >= 0 ? n : null;
+  };
+  return { tracks: read('x-crate-tracks'), playlists: read('x-crate-playlists') };
+}
+
 // Ask Spotify how long a lockout has left. Browsers cannot read Retry-After
 // (Spotify sends no Access-Control-Expose-Headers), but a server can — so the
 // one number that matters during a rate limit stops being invisible.
@@ -71,6 +92,20 @@ const pathFor = (userId) => `crates/${encodeURIComponent(userId)}.json`;
 // /me/playlists was refused, so testing /me reported "all clear" during a
 // lockout — worse than not checking.
 const SPOTIFY_PROBE = 'https://api.spotify.com/v1/me/playlists?limit=1';
+
+// Copies written before the sidecar existed have none, so every failure here
+// is ordinary: say "unknown" rather than treating it as an error.
+async function readSidecar(pathname) {
+  try {
+    const meta = await head(pathname);
+    const r = await fetch(meta.downloadUrl || meta.url);
+    if (!r.ok) return { tracks: null, playlists: null };
+    const data = await r.json();
+    return { tracks: data.tracks ?? null, playlists: data.playlists ?? null };
+  } catch {
+    return { tracks: null, playlists: null };
+  }
+}
 
 async function probe(auth) {
   const r = await fetch(SPOTIFY_PROBE, { headers: { Authorization: auth } });
@@ -121,11 +156,19 @@ export default async function handler(req, res) {
   const pathname = pathFor(userId);
 
   if (req.method === 'GET' && 'meta' in (req.query || {})) {
-    // Just the timestamp: enough to tell whether the stored copy is newer than
-    // what this device holds, without shipping several megabytes to find out.
+    // Enough to tell whether the stored copy is newer than what this device
+    // holds, and how much is in it, without shipping several megabytes.
     try {
       const meta = await head(pathname);
-      return json(res, 200, { uploadedAt: meta.uploadedAt || null, bytes: meta.size || 0 });
+      const counts = await readSidecar(sidecarFor(userId));
+      return json(res, 200, {
+        uploadedAt: meta.uploadedAt || null,
+        bytes: meta.size || 0,
+        // null, not 0, when a copy predates the sidecar: the client has to be
+        // able to tell "no tracks" from "we do not know".
+        tracks: counts.tracks,
+        playlists: counts.playlists,
+      });
     } catch {
       return json(res, 404, { error: 'No crate stored yet.' });
     }
@@ -159,6 +202,24 @@ export default async function handler(req, res) {
       addRandomSuffix: false,
       allowOverwrite: true,
     });
+
+    // After the crate, and never instead of it. If it fails, the previous
+    // sidecar is still sitting there describing a crate that no longer exists,
+    // which is worse than saying nothing — a stale count is read as fact, and
+    // the whole point of the count is to be trusted. So take it away.
+    const counts = countsFrom(req.headers);
+    try {
+      await put(sidecarFor(userId), JSON.stringify({ ...counts, bytes: body.length }), {
+        access: 'private',
+        contentType: 'application/json',
+        addRandomSuffix: false,
+        allowOverwrite: true,
+      });
+    } catch {
+      // Back to "unknown", which the client already knows how to describe.
+      await del(sidecarFor(userId)).catch(() => {});
+    }
+
     return json(res, 200, { ok: true, bytes: body.length, updatedAt: saved.uploadedAt || null });
   }
 

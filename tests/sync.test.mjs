@@ -103,6 +103,9 @@ function json(route, body) {
 
 let cloudStore = null;
 let cloudUploadedAt = null;
+// What the sidecar holds about the stored copy. null means a crate saved
+// before the sidecar existed, which the real endpoint still has to describe.
+let cloudCounts = { tracks: null, playlists: null };
 
 // Mirrors the real endpoint: a Spotify token buys a pass, and the pass alone
 // is enough afterwards — including while Spotify is rate-limiting.
@@ -131,6 +134,13 @@ async function installCloudMock(page) {
     if (method === 'PUT') {
       cloudStore = route.request().postData();
       cloudUploadedAt = new Date().toISOString();
+      const count = (name) => {
+        const raw = headers[name];
+        if (raw === undefined || String(raw).trim() === '') return null;
+        const n = Number(raw);
+        return Number.isInteger(n) && n >= 0 ? n : null;
+      };
+      cloudCounts = { tracks: count('x-crate-tracks'), playlists: count('x-crate-playlists') };
       server.counters.cloudPuts.push(cloudStore.length);
       return route.fulfill({
         status: 200,
@@ -154,7 +164,12 @@ async function installCloudMock(page) {
         status: 200,
         contentType: 'application/json',
         headers: mint,
-        body: JSON.stringify({ uploadedAt: cloudUploadedAt, bytes: cloudStore.length }),
+        body: JSON.stringify({
+          uploadedAt: cloudUploadedAt,
+          bytes: cloudStore.length,
+          tracks: cloudCounts.tracks,
+          playlists: cloudCounts.playlists,
+        }),
       });
     }
     if (!cloudStore) {
@@ -980,6 +995,90 @@ test('an older device does not overwrite a newer crate saved elsewhere', async (
     { timeout: 15000 },
   );
   assert.equal(server.counters.cloudPuts.length, 1, 'this device overwrote it on request');
+
+  await fresh.close();
+  cloudUploadedAt = null;
+});
+
+test('the stored copy is described in the same terms as this one', async () => {
+  const fresh = await deviceWithCrate('test-pass');
+
+  // A copy saved by a device that counted what it was sending.
+  await fresh.evaluate(() => localStorage.removeItem('crate.pushedSync'));
+  cloudUploadedAt = '2030-01-01T00:00:00Z';
+  cloudCounts = { tracks: 412, playlists: 7 };
+
+  await fresh.reload();
+  await fresh.waitForSelector('.album');
+  await fresh.waitForFunction(
+    () => /Another device saved a crate/i.test(document.getElementById('banner').textContent),
+    null,
+    { timeout: 15000 },
+  );
+
+  // Both sides in tracks, so the choice is between two comparable things.
+  const text = await fresh.textContent('#banner');
+  assert.match(text, /\(412 tracks from 7 playlists\)/);
+  assert.doesNotMatch(text, /MB/);
+
+  await fresh.close();
+  cloudUploadedAt = null;
+  cloudCounts = { tracks: null, playlists: null };
+});
+
+test('a copy saved before the counts existed still says something', async () => {
+  const fresh = await deviceWithCrate('test-pass');
+
+  await fresh.evaluate(() => localStorage.removeItem('crate.pushedSync'));
+  cloudUploadedAt = '2030-01-01T00:00:00Z';
+  cloudCounts = { tracks: null, playlists: null };
+
+  await fresh.reload();
+  await fresh.waitForSelector('.album');
+  await fresh.waitForFunction(
+    () => /Another device saved a crate/i.test(document.getElementById('banner').textContent),
+    null,
+    { timeout: 15000 },
+  );
+
+  // Falls back to bytes rather than claiming a count it does not have.
+  assert.match(await fresh.textContent('#banner'), /\((unknown size|[\d.]+ MB)\)/);
+
+  await fresh.close();
+  cloudUploadedAt = null;
+});
+
+test('the question can be declined, and does not come back', async () => {
+  const fresh = await deviceWithCrate('test-pass');
+
+  await fresh.evaluate(() => localStorage.removeItem('crate.pushedSync'));
+  cloudUploadedAt = '2030-01-01T00:00:00Z';
+  server.counters.cloudPuts = [];
+
+  await fresh.reload();
+  await fresh.waitForSelector('.album');
+  await fresh.waitForSelector('#btnNotNow', { timeout: 15000 });
+  await fresh.click('#btnNotNow');
+
+  await fresh.waitForFunction(
+    () => document.getElementById('banner').hidden,
+    null,
+    { timeout: 15000 },
+  );
+
+  // Declining is not choosing: neither copy moved.
+  assert.equal(server.counters.cloudPuts.length, 0, 'nothing was uploaded');
+
+  // And the same question does not get asked again on the next load.
+  await fresh.reload();
+  await fresh.waitForSelector('.album');
+  await fresh.waitForTimeout(1200);
+  assert.equal(
+    await fresh.evaluate(() => document.getElementById('banner').hidden),
+    true,
+    'the banner stayed down',
+  );
+  assert.equal(server.counters.cloudPuts.length, 0, 'still nothing uploaded');
 
   await fresh.close();
   cloudUploadedAt = null;

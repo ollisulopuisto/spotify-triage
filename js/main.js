@@ -1109,10 +1109,26 @@ const LS_PUSHED = 'crate.pushedSync';
 
 async function pushToCloud() {
   const payload = cloud.snapshotOf(state.cached, state.selectedPlaylists, state.lastSync);
-  const { bytes } = await cloud.push(payload);
+  const { bytes } = await cloud.push(payload, {
+    tracks: state.library.tracks.length,
+    playlists: state.selectedPlaylists.size,
+  });
   // Remember what was uploaded so a reload does not re-send 7MB for nothing.
   localStorage.setItem(LS_PUSHED, state.lastSync || '');
   console.info('[crate] cloud copy updated,', Math.round(bytes / 1024), 'kB');
+}
+
+// Describe the stored copy in whatever terms it can support. Counts are the
+// ones worth comparing; bytes are the fallback for copies saved before the
+// sidecar existed, and they answer a different question than the reader asked.
+function describeStored(meta) {
+  if (meta && Number.isInteger(meta.tracks)) {
+    const from = Number.isInteger(meta.playlists)
+      ? ` from ${plural(meta.playlists, 'playlist', 'playlists')}` : '';
+    return `${plural(meta.tracks, 'track', 'tracks')}${from}`;
+  }
+  if (meta && meta.bytes) return `${Math.round(meta.bytes / 1024 / 1024 * 10) / 10} MB`;
+  return 'unknown size';
 }
 
 // Tying the upload to a sync means you cannot back up while rate-limited —
@@ -1131,9 +1147,8 @@ async function backUpIfStale() {
       // Newer is not the same as better — a half-finished sync from a phone is
       // newer than a complete one from here — so describe both and let the
       // person decide which survives.
-      const size = meta.bytes ? `${Math.round(meta.bytes / 1024 / 1024 * 10) / 10} MB` : 'unknown size';
       banner(
-        `Another device saved a crate ${dateLabel(stored)} (${size}).`
+        `Another device saved a crate ${dateLabel(stored)} (${describeStored(meta)}).`
         + ` This one holds ${plural(state.library.tracks.length, 'track', 'tracks')}`
         + ` from ${plural(state.selectedPlaylists.size, 'playlist', 'playlists')}.`,
         'warn',
@@ -1152,6 +1167,17 @@ async function backUpIfStale() {
             },
           },
           { id: 'bannerAction', label: 'Restore it', onClick: () => { banner(''); pullFromCloud(); } },
+          {
+            // Neither copy is wrong often enough to be worth deciding under
+            // duress. Remembering the refusal against this sync is the whole
+            // point: without it the same question returns on every load.
+            id: 'btnNotNow',
+            label: 'Not now',
+            onClick: () => {
+              localStorage.setItem(LS_PUSHED, state.lastSync || '');
+              banner('');
+            },
+          },
         ],
       );
       return;

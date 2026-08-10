@@ -12,9 +12,9 @@ const LS_PASS = 'crate.cloudPass';
 // The server mints a pass after verifying us with Spotify once. Keeping it
 // means later calls need no Spotify round trip — which matters precisely when
 // Spotify is rate-limiting, since that is when the copy is most useful.
-async function authed(method, body, query = '') {
+async function authed(method, body, query = '', extra = null) {
   const pass = localStorage.getItem(LS_PASS);
-  const headers = { ...(body ? { 'Content-Type': 'application/json' } : {}) };
+  const headers = { ...(body ? { 'Content-Type': 'application/json' } : {}), ...(extra || {}) };
   if (pass) headers['X-Crate-Pass'] = pass;
 
   // Only reach for a token when there is no pass: refreshing one can itself
@@ -53,10 +53,17 @@ export function snapshotOf(playlists, selectedIds, lastSync) {
   });
 }
 
-export async function push(payload) {
-  let res = await authed('PUT', payload);
+// `counts` describes the payload so the next device can be told what is on
+// offer without downloading it first.
+export async function push(payload, counts = null) {
+  const headers = counts ? {
+    'X-Crate-Tracks': String(counts.tracks ?? ''),
+    'X-Crate-Playlists': String(counts.playlists ?? ''),
+  } : null;
+
+  let res = await authed('PUT', payload, '', headers);
   // One retry after a stale pass was discarded, this time with a token.
-  if (res.status === 401) res = await authed('PUT', payload);
+  if (res.status === 401) res = await authed('PUT', payload, '', headers);
   if (!res.ok) {
     const detail = await res.json().catch(() => null);
     throw new Error((detail && detail.error) || `Upload failed (${res.status}).`);
@@ -64,8 +71,9 @@ export async function push(payload) {
   return res.json();
 }
 
-// When the stored copy was last written, or null if there is none. Cheap: no
-// payload comes back.
+// When the stored copy was last written and how much is in it, or null if
+// there is none. Cheap: no payload comes back. `tracks` and `playlists` are
+// null for copies written before the sidecar existed.
 export async function storedMeta() {
   const res = await authed('GET', null, '?meta=1');
   if (!res.ok) return null;
