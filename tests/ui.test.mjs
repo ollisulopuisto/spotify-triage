@@ -200,6 +200,33 @@ test('the Client ID field explains what is wrong before you submit', async () =>
   await fresh.close();
 });
 
+test('signing out drops the cloud pass along with the Spotify tokens', async () => {
+  // A pass left behind is a 90-day ticket to the stored crate that outlives
+  // the sign-out: a shared device could pull the library with no Spotify at all.
+  const p = await browser.newPage();
+  await p.route('**/api/crate*', (r) => r.fulfill({
+    status: 404, contentType: 'application/json', body: '{}',
+  }));
+  await p.route('**://api.spotify.com/**', (r) => r.abort());
+  await p.route('**://accounts.spotify.com/**', (r) => r.abort());
+  await p.goto(BASE_URL);
+  await seed(p, fakeCrate());
+  await p.evaluate(() => localStorage.setItem('crate.cloudPass', 'test-pass'));
+  await p.reload();
+  await p.waitForSelector('#app:not([hidden])');
+
+  await p.click('#btnSignOut');
+  await p.waitForSelector('#setup:not([hidden])');
+
+  assert.equal(await p.evaluate(() => localStorage.getItem('crate.tokens')), null);
+  assert.equal(
+    await p.evaluate(() => localStorage.getItem('crate.cloudPass')),
+    null,
+    'the pass must not outlive the sign-in',
+  );
+  await p.close();
+});
+
 test('a synced crate renders as albums, deduplicated across months', async () => {
   await page.waitForSelector('.album');
   // 6 distinct albums across 24 playlists, not 24 x 4 entries.

@@ -1527,6 +1527,7 @@ function wire() {
 
   $('btnSignOut').onclick = () => {
     auth.logout();
+    cloud.clearPass();
     showSetup(true);
     banner('Signed out. Your cached crate is still here.', 'ok');
   };

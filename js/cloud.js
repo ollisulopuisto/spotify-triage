@@ -31,6 +31,13 @@ async function authed(method, body, query = '', extra = null) {
   return res;
 }
 
+// A signed-out device holds no Spotify credentials, so it should not keep a
+// working ticket to the stored crate either. The local IndexedDB copy stays;
+// only the server pass is dropped.
+export function clearPass() {
+  localStorage.removeItem(LS_PASS);
+}
+
 // What Spotify says about our rate-limit status, read server-side because the
 // browser is not allowed to see Retry-After.
 export async function probeSpotify() {
