@@ -10,6 +10,7 @@ import {
   buildLibrary, groupAlbums, search, sortResults, facets, SORTS,
   alphaCounts, initialOf, artUrl, filedYearOf, yearCounts, byBucket,
 } from './library.js';
+import { guardIme } from './imeEnter.js';
 
 // --- tiny DOM helper -------------------------------------------------------
 // Building nodes instead of innerHTML means a track called
@@ -1536,9 +1537,9 @@ function wire() {
     return /^[0-9a-f]{32}$/i.test(raw);
   };
   $('clientId').addEventListener('input', checkClientId);
-  $('clientId').addEventListener('keydown', (e) => {
+  $('clientId').addEventListener('keydown', guardIme((e) => {
     if (e.key === 'Enter') $('btnSignIn').click();
-  });
+  }));
   checkClientId();
 
   $('btnCopyRedirect').onclick = async () => {
