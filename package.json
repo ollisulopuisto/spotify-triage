@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "serve": "python3 -m http.server 8765 --bind 127.0.0.1",
-    "test": "node --test tests/library.test.mjs",
+    "test": "node --test tests/library.test.mjs tests/ime-enter.test.mjs",
     "test:ui": "node --test tests/ui.test.mjs",
     "test:sync": "node --test tests/sync.test.mjs",
     "test:all": "npm test && npm run test:ui && npm run test:sync"

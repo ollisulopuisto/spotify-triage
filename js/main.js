@@ -1499,6 +1499,7 @@ function wire() {
   };
   $('clientId').addEventListener('input', checkClientId);
   $('clientId').addEventListener('keydown', (e) => {
+    if (e.isComposing || e.keyCode === 229) return;
     if (e.key === 'Enter') $('btnSignIn').click();
   });
   checkClientId();
