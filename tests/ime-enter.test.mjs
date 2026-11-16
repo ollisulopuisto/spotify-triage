@@ -1,19 +1,40 @@
-// Run with: node --test spotify-crate/tests/ime-enter.test.mjs
+// Run with: node --test tests/ime-enter.test.mjs  (npm test includes it)
 //
 // Enter during IME composition (CJK input) is the composition's confirm key,
 // not a submit. legacy-scan (ime-safe-enter-submit) flagged the Client ID
 // field's keydown listener in js/main.js for clicking sign-in on Enter
-// without checking event.isComposing / event.keyCode === 229. The guard must
-// sit at the top of that handler. (main.js is a browser module, so this
-// checks the source rather than importing it.)
+// without checking event.isComposing / event.keyCode === 229. That listener
+// wraps its handler in guardIme from js/imeEnter.js (main.js boots the app
+// at import, so this drives the wrapper directly with composing and plain
+// keydown events).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { guardIme } from '../js/imeEnter.js';
 
-test('the Client ID Enter handler returns early during IME composition', () => {
-  const source = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8').split('\n');
-  const listener = source.findIndex((line) => line.includes("$('clientId').addEventListener('keydown'"));
-  assert.notEqual(listener, -1, 'clientId keydown listener not found; re-anchor the test');
-  const head = source.slice(listener + 1, listener + 4).join('\n');
-  assert.match(head, /isComposing/, 'no isComposing guard at the top of the handler');
+function fakeField() {
+  const listeners = [];
+  return {
+    addEventListener: (type, fn) => { if (type === 'keydown') listeners.push(fn); },
+    keydown: (e) => listeners.forEach((fn) => fn(e)),
+  };
+}
+
+test('composing keydowns never reach the guarded handler', () => {
+  const field = fakeField();
+  const seen = [];
+  field.addEventListener('keydown', guardIme((e) => seen.push(e)));
+  field.keydown({ key: 'Enter', isComposing: true });
+  field.keydown({ key: 'Enter', keyCode: 229 });
+  assert.equal(seen.length, 0);
+});
+
+test('plain keydowns reach the handler with the original event', () => {
+  const field = fakeField();
+  const seen = [];
+  field.addEventListener('keydown', guardIme((e) => seen.push(e)));
+  const plain = { key: 'Enter' };
+  field.keydown(plain);
+  field.keydown({ key: 'Escape' });
+  assert.equal(seen.length, 2);
+  assert.equal(seen[0], plain);
 });
