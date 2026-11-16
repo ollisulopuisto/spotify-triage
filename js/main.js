@@ -210,6 +210,12 @@ async function loadCache() {
   state.library = buildLibrary(
     state.cached.filter((p) => state.selectedPlaylists.has(p.id)),
   );
+  // The library was rebuilt from fresh track objects, so cached derived data
+  // (matches, groups, facets) would reference the old ones — drop it.
+  searchKey = null;
+  matchedCache = null;
+  baseCache = null;
+  facetsCache = null;
 }
 
 async function fetchCatalog() {
@@ -815,7 +821,7 @@ function renderAlpha() {
 }
 
 function renderFacets() {
-  const f = facets(state.matched);
+  const f = facetsCache || facets(state.matched);
 
   const artistBox = $('facetArtists');
   artistBox.textContent = '';
@@ -979,7 +985,7 @@ function selectedTrackIds() {
 
 function renderCounts() {
   const nAlbums = state.view === 'albums'
-    ? state.items.length
+    ? baseCache.length
     : groupAlbums(state.matched).length;
 
   $('count').textContent = state.library.tracks.length
@@ -1009,10 +1015,42 @@ function renderCounts() {
     : 'Save these results as a playlist';
 }
 
-function render() {
-  state.matched = search(state.library.tracks, state.query, state.filters);
+// Cached derived search data. Everything here depends only on the query,
+// filters and (for base) the current view, so "Show more", re-sorting,
+// re-bucketing and re-layout reuse it instead of re-scanning the library and
+// re-grouping/re-faceting identical results. Invalidated in loadCache() when
+// the library is rebuilt from fresh track objects.
+let searchKey = null;
+let matchedCache = null;
+let baseCache = null;
+let facetsCache = null;
+let baseView = null;
 
-  const base = state.view === 'albums' ? groupAlbums(state.matched) : state.matched;
+function libKey(query, filters) {
+  const ids = filters.playlistIds ? [...filters.playlistIds].sort().join(',') : '';
+  return `${query}\0${filters.yearFrom}\0${filters.yearTo}\0${filters.addedFrom}\0${filters.addedTo}\0${ids}`;
+}
+
+function render() {
+  const key = libKey(state.query, state.filters);
+  if (key !== searchKey) {
+    // Only re-scan the library when the query or filters actually changed.
+    state.matched = search(state.library.tracks, state.query, state.filters);
+    searchKey = key;
+    matchedCache = null;
+    baseCache = null;
+    facetsCache = null;
+  }
+  if (!matchedCache) {
+    matchedCache = state.matched;
+    facetsCache = facets(state.matched);
+  }
+  if (!baseCache || baseView !== state.view) {
+    baseCache = state.view === 'albums' ? groupAlbums(state.matched) : state.matched;
+    baseView = state.view;
+  }
+
+  const base = baseCache;
   // Count before the bucket filter, so the rail always shows the shape of the
   // current search rather than of the bucket you already picked.
   state.alphaCounts = state.alphaKey === 'filed'
